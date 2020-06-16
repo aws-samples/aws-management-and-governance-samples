@@ -1,11 +1,9 @@
-## My Project
+## aws-management-and-governance-samples
 
-TODO: Fill this README out!
+This repository contains a collection of samples for the Management and Governance services which includes: CloudWatch, CloudFormation, Cloudtrail, Config, Systems Manager and more.
 
-Be sure to:
+The samples are desgined to educate AWS customers on how to implement management and governance services. They are organized by service, although some of the samples maybe be leveraging multiple services. 
 
-* Change the title in this README
-* Edit your repository description on GitHub
 
 ## Security
 
