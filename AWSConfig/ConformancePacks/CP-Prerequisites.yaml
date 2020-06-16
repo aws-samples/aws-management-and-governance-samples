@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This is a quick start cloudformation template for AWS Config Conformance packs. It will create all the necessary resource to start using Conformance Packs for using conformance pack with one AWS Account. That is the service linked role, bucket and bucket policy
+Parameters:
+  CreateServiceLinkedRole:
+    Description: >-
+      Specify if the service linked role should be created as part of the
+      deployment of the stack. 
+    Default: true
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    ConstraintDescription: Must specify weather to create the service linked role or not.
+  CPBucketName:
+    Type: String
+    Description: >-
+      Enter the name of the bucket that will be used to deliver the conformance
+      pack evaluation results
+Conditions:
+  CreateSLR: !Equals 
+    - !Ref CreateServiceLinkedRole
+    - true
+Resources:
+  CPDeliveryS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref CPBucketName
+  CPBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref CPDeliveryS3Bucket
+      PolicyDocument:
+        Statement:
+          - Sid: AWSConfigConformsBucketPermissionsCheck
+            Effect: Allow
+            Principal:
+              AWS: !Join 
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':role/aws-service-role/config-conforms.amazonaws.com/'
+                  - AWSServiceRoleForConfigConforms
+            Action: 's3:GetBucketAcl'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref CPDeliveryS3Bucket
+          - Sid: AWSConfigConformsBucketDelivery
+            Effect: Allow
+            Principal:
+              AWS: !Join 
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - >-
+                    :role/aws-service-role/config-conforms.amazonaws.com/AWSServiceRoleForConfigConforms
+            Action: 's3:PutObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref CPDeliveryS3Bucket
+                - /AWSLogs/
+                - !Ref 'AWS::AccountId'
+                - /Config/*
+            Condition:
+              StringEquals:
+                's3:x-amz-acl':
+                  - bucket-owner-full-control
+          - Sid: ' AWSConfigConformsBucketReadAccess'
+            Effect: Allow
+            Principal:
+              AWS: !Join 
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - >-
+                    :role/aws-service-role/config-conforms.amazonaws.com/AWSServiceRoleForConfigConforms
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref CPDeliveryS3Bucket
+                - /AWSLogs/
+                - !Ref 'AWS::AccountId'
+                - /Config/*
+  CPSerciceLinkedRole:
+    Type: 'AWS::IAM::ServiceLinkedRole'
+    Condition: CreateSLR
+    Properties:
+      AWSServiceName: config-conforms.amazonaws.com
+      Description: Service Linked Role for Conformance Pack Deployment
