@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This is a quick start cloudformation template for AWS Config Conformance packs. It will create all the necessary resource to start using Conformance Packs for using conformance pack with one AWS Account. That is the service linked role, bucket and bucket policy
+Description: This is a quick start cloudformation template for AWS Config Conformance packs. It will create all the necessary resource to start using Conformance Packs one AWS Account. That is the service linked role, bucket and bucket policy
 Parameters:
   CreateServiceLinkedRole:
     Description: >-

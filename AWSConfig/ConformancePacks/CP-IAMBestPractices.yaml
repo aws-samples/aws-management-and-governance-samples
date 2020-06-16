@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This template is inteded as a demo of the MAGIC workshop program. It automatically creates all the needed prerequisites for Conformance Packs to work, bucket, policy and service role. It also deploys a simplified version of the IAM Best Practices Conformance Pack to quickly setup a POC. Please note resource charges for S3 buckets, Config and Conformance pack will apply.  
+Description: This template automatically deploy the AWS Config Conformance Pack for Operational Best Practices for AWS Identity And Access Management. Please note resource charges for S3 buckets, Config and Conformance pack will apply.  
 Parameters:
   ConformancePackDeliveryBucket:
     Type: String
