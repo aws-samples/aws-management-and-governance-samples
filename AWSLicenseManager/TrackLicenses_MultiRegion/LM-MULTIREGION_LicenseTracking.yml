@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template that creates AWS resources required to track License Consumption across multiple AWS regions in an account
+Parameters:
+  LambdaTriggerSchedule:
+    Type: String
+    Description: Provide the schedule expression in the format of cron/rate expressions. Check https://docs.aws.amazon.com/eventbridge/latest/userguide/scheduled-events.html for more details.
+    Default: "rate(1 day)"
+    AllowedPattern: .+
+  LicenseConfigArns:
+    Type: String
+    Description: Provide the list of license configuration ARNs separated by comma.
+    AllowedPattern: .+
+Resources:
+  LicenseConsumptionBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-license-consumption-reports'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LicenseManager-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - license-manager:GetLicenseConfiguration
+                  - license-manager:ListUsageForLicenseConfiguration
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${LicenseConsumptionBucket}/*"
+              - Action: ['logs:CreateLogGroup','logs:CreateLogStream','logs:PutLogEvents']
+                Effect: Allow
+                Resource: '*'
+  LicenseTrackingLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.7
+      Role: !GetAtt LambdaRole.Arn
+      Handler: index.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          licenseConfigArns: !Ref LicenseConfigArns
+          s3bucketName: !Ref LicenseConsumptionBucket
+      Code:
+        ZipFile: |
+          import json, csv, io, os, datetime, boto3, logging, os, re
+          # Logging setup
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              try:
+                  date = datetime.datetime.now()
+                  arns = os.environ["licenseConfigArns"].split(",")
+                  logger.info(f"Provided {len(arns)} arns as input")
+                  all_arn_details = list()
+                  malformed_arns = list()
+                  # If there is arn provided, we validate the arn and fetch data for each ARN
+                  for arn in arns:
+                      # Validates if input ARN is valid
+                      p = re.compile(
+                          "arn:aws:license-manager:[a-z]{2}((-gov)|(-iso(b?)))?-[a-z]+-\d{1}:\d{12}:license-configuration:lic-+((|[a-zA-Z0-9-_]+))?")
+                      match = p.match(arn)
+                      if match:
+                          client = boto3.client('license-manager', region_name=arn.split(":")[3])
+                          arn_details = client.get_license_configuration(LicenseConfigurationArn=arn)
+                          all_arn_details.append(arn_details)
+                          # Fetches the license usages for each one
+                          usage = client.list_usage_for_license_configuration(LicenseConfigurationArn=arn)[
+                              "LicenseConfigurationUsageList"]
+                          if len(usage) > 0:
+                              output = io.StringIO()
+                              writer = csv.writer(output, quoting=csv.QUOTE_NONNUMERIC)
+                              writer.writerow(usage[0].keys())
+                              for use in usage:
+                                  writer.writerow(use.values())
+                                  boto3.client("s3").put_object(Body=output.getvalue().encode("utf-8"),
+                                                                Bucket=os.environ["s3bucketName"],
+                                                                Key=f"{date.year}/{date.month}/{date.day}/{date}/{arn}-usage.csv")
+                                  logger.info(f"Successfully stored usage information for arn {arn}")
+                      else:
+                          logger.error(f"Provided an invalid arn {arn}")
+                          malformed_arns.append(arn)
+                  logger.info(f"Generated license configurations for {len(all_arn_details)} arns")
+                  if len(all_arn_details) != 0:
+                      output = io.StringIO()
+                      writer = csv.writer(output, quoting=csv.QUOTE_NONNUMERIC)
+                      writer.writerow(all_arn_details[0].keys())
+                      for arn_detail in all_arn_details:
+                          writer.writerow(arn_detail.values())
+                      # Upload the license details file to S3
+                      boto3.client("s3").put_object(Body=output.getvalue().encode("utf-8"),
+                                                    Bucket=os.environ["s3bucketName"],
+                                                    Key=f"{date.year}/{date.month}/{date.day}/{date}/license-consumption-summary.csv")
+                      logger.info(f"Succesfully stored all arn details")
+                  # retuns succes code on succesful run.
+                  return {
+                      'statusCode': 200,
+                      'body': f"Successfully uploaded license consumption details to S3, skipped {len(malformed_arns)} invalid arns"
+                  }
+              except Exception as e:
+                  logger.error(f"Failed to fetch license configuration: {e.__repr__()}", exc_info=True)
+                  return {
+                      'statusCode': 500,
+                      'body': f"Unexpected exception occurred"
+                  }
+  LicenseManagerLambdaEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Schedule rule to trigger lambda to fetch license usage"
+      Name: "LicenseManagerLambdaEventJob"
+      ScheduleExpression: !Ref LambdaTriggerSchedule
+      State: ENABLED
+      Targets:
+        -
+          Arn: !GetAtt LicenseTrackingLambdaFunction.Arn
+          Id: "LicenseTrackingLambdaFunction"
