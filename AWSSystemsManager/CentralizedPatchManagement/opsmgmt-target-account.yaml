@@ -1,0 +1,176 @@
+#*
+#* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#* SPDX-License-Identifier: MIT-0
+#*
+#* Permission is hereby granted, free of charge, to any person obtaining a copy of this
+#* software and associated documentation files (the "Software"), to deal in the Software
+#* without restriction, including without limitation the rights to use, copy, modify,
+#* merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+#* permit persons to whom the Software is furnished to do so.
+#*
+#* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+#* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+#* PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+#* HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#* OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+#* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#*
+
+#------------------------------------------------------------------------------
+#
+# Template: opsmgmt-target-account.yaml
+# Purpose:  Configures the target accounts for multi-account/multi-region Automation using Patch Manager
+#
+#
+#------------------------------------------------------------------------------
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation template to configure a target account for a scheduled multi-account and multi-region Automation patching operation.
+
+#-----------------------------------------------------------
+# Parameters
+#-----------------------------------------------------------
+Parameters :
+
+  CentralAccountNumber :
+    Type : 'String'
+    Description: 'Account number for the central account.'
+    Default: ''
+  ExecutionLogsS3Bucket :
+    Type : 'String'
+    Description: 'Name of the S3 bucket that lives in the central account.'
+    Default: ''
+  ExecutionLogsS3BucketPrefix :
+    Type : 'String'
+    Description: 'Name of the prefix to use in the central account S3 bucket for inventory execution data.'
+    Default: 'inventory-execution-logs'
+  ExistingAutomationExecutionRole :
+    Type : 'String'
+    Description: '(Optional) The IAM role ARN of an Automation Execution role which has permissions to invoke patching Automation workflows and has a trust relationship with the central account.'
+    Default: ''
+  ManagedInstanceDataEncryptionKey:
+    Type : 'String'
+    Description: 'KMS Key used to encrypt S3 bucket.'
+    Default: ''
+  ResourceSyncS3Bucket :
+    Type : 'String'
+    Description: 'Name of the Resource Data Sync S3 bucket that lives in the central account.'
+    Default: ''
+  ResourceSyncS3BucketRegion :
+    Type : 'String'
+    Description: 'Region where the Resource Data Sync S3 bucket is located.'
+    Default: ''
+  ResourceDataSyncName :
+    Type : 'String'
+    Description: 'Name for the Resource Data Sync.'
+    Default: 'InventoryData'
+    
+Conditions:
+  CreateAutomationExecutionRoleCondition:
+    Fn::Equals:
+    - Ref: ExistingAutomationExecutionRole
+    - ''
+
+Resources:
+
+  #-------------------------------------------------
+  # IAM role to enable multi-account/multi-region Automation
+  #-------------------------------------------------
+  AutomationExecutionServiceRole:
+    Type: AWS::IAM::Role
+    Condition: CreateAutomationExecutionRoleCondition
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ssm.amazonaws.com
+            AWS: 
+            - !Join [ '', ['arn:aws:iam::', !Ref 'CentralAccountNumber', ':root'] ]
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+      Path: "/"
+      RoleName: AWS-SystemsManager-AutomationExecutionRole
+      Policies:
+      - PolicyName: passRole
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - iam:PassRole
+            Resource: 
+            - !Join [ '', ['arn:aws:iam::', !Ref 'AWS::AccountId', ':role/AWS-SystemsManager-AutomationExecutionRole'] ]
+      - PolicyName: getTagPermissions
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - tag:GetResources
+            Resource: "*"
+      - PolicyName: listResourceGroupResourcesPermissions
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - resource-groups:listGroupResources
+            Resource: "*"
+            
+  #-------------------------------------------------
+  # State Manager Association to gather Inventory data using AWS-GatherSoftwareInventory
+  #-------------------------------------------------
+  InventoryAssociation:
+    Type: AWS::SSM::Association
+    Properties:
+      AssociationName: Inventory-Association
+      Name: AWS-GatherSoftwareInventory
+      ScheduleExpression: "rate(1 day)"
+      OutputLocation:
+        S3Location: 
+          OutputS3BucketName: !Ref ExecutionLogsS3Bucket
+          OutputS3KeyPrefix: !Join [ '', [!Ref ExecutionLogsS3BucketPrefix, '/', 'accountid=', !Ref 'AWS::AccountId', '/', 'region=', !Ref 'AWS::Region'] ]
+      Targets:
+      - Key: InstanceIds
+        Values:
+        - "*"
+      Parameters: 
+        applications: 
+          - "Enabled"
+        awsComponents: 
+          - "Enabled"
+        files:
+          - ""
+        networkConfig: 
+          - "Enabled"
+        windowsUpdates: 
+          - "Enabled"
+        instanceDetailedInformation: 
+          - "Enabled"
+        services: 
+          - "Enabled"
+        windowsRegistry:
+          - ""
+        windowsRoles: 
+          - "Enabled"
+        customInventory:
+          - "Enabled"
+        billingInfo: 
+          - "Enabled"
+          
+  #-------------------------------------------------
+  # Resource Data Sync to aggregate inventory, patching, and compliance data in the central S3 bucket
+  #-------------------------------------------------
+  ResourceDataSync:
+    Type: AWS::SSM::ResourceDataSync
+    Properties: 
+      SyncName: !Ref ResourceDataSyncName
+      S3Destination:
+        BucketName: !Ref ResourceSyncS3Bucket
+        BucketRegion: !Ref ResourceSyncS3BucketRegion
+        KMSKeyArn: !Ref ManagedInstanceDataEncryptionKey
+        SyncFormat: 'JsonSerDe'
