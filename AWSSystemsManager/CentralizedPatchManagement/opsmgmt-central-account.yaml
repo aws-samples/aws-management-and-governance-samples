@@ -1,0 +1,558 @@
+#*
+#* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#* SPDX-License-Identifier: MIT-0
+#*
+#* Permission is hereby granted, free of charge, to any person obtaining a copy of this
+#* software and associated documentation files (the "Software"), to deal in the Software
+#* without restriction, including without limitation the rights to use, copy, modify,
+#* merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+#* permit persons to whom the Software is furnished to do so.
+#*
+#* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+#* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+#* PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+#* HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#* OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+#* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#*
+ 
+#------------------------------------------------------------------------------
+#
+# Template: opsmgmt-central-account.yaml
+# Purpose:  Configures the Systems Manager master account
+#
+#
+#------------------------------------------------------------------------------
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation template to create a scheduled multi-account and multi-region Automation patching operation.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+
+    ParameterGroups:
+      - Label:
+          default: General
+        Parameters:
+          - OrganizationId
+          - TagName
+          - TagValue
+
+    ParameterLabels:
+      OrganizationId:
+        default: Organization ID
+
+      TagName:
+        default: Tag Name
+
+      TagValue:
+        default: Tag Value
+
+#-----------------------------------------------------------
+# Parameters
+#-----------------------------------------------------------
+Parameters :
+
+  OrganizationId:
+    Description: Organization ID used for S3 bucket sharing
+    Type: String
+
+  TagName:
+    Description: Tag name used for resources
+    Type: String
+    Default: APP
+
+  TagValue:
+    Description: Tag value used for resources
+    Type: String
+    Default: SSM
+
+Resources:
+
+  #-------------------------------------------------
+  # Key used to encrypt instance data
+  #-------------------------------------------------
+  ManagedInstanceDataEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Key used to encrypt instance data
+      Enabled: True
+      EnableKeyRotation: True
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: AccountPolicy
+        Statement:
+        - Sid: Enable IAM User Permissions
+          Effect: Allow
+          Principal:
+            AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: '*'
+        - Sid: Allow use of the key by Systems Manager
+          Effect: Allow
+          Principal:
+            Service: ssm.amazonaws.com
+          Action:
+            - kms:DescribeKey
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey
+            - kms:GenerateDataKeyWithoutPlaintext
+          Resource: '*'
+        - Sid: Allow use of the key by service roles within the organization
+          Effect: Allow
+          Principal: "*"
+          Action:
+            - kms:Encrypt
+            - kms:GenerateDataKey
+          Resource: '*'
+          Condition:
+            StringEquals:
+              aws:PrincipalOrgID: !Ref OrganizationId
+      Tags:
+        - Key: !Ref TagName
+          Value: !Ref TagValue
+
+  ManagedInstanceDataEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/SSM-ManagedInstanceDataEncryptionKey
+      TargetKeyId: !Ref ManagedInstanceDataEncryptionKey
+
+  #-------------------------------------------------
+  # Bucket used to store instance data
+  #-------------------------------------------------
+  ResouceSyncBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'ssm-resource-sync-${AWS::Region}-${AWS::AccountId}'
+      AccessControl: BucketOwnerFullControl
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !Ref ManagedInstanceDataEncryptionKey
+              SSEAlgorithm: aws:kms
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: !Ref TagName
+          Value: !Ref TagValue
+
+  #-------------------------------------------------
+  # Bucket policy to add to S3 bucket to store instance data
+  #-------------------------------------------------
+  ResouceSyncBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResouceSyncBucket
+      PolicyDocument:
+        Statement:
+        - Sid: SSMBucketPermissionsCheck
+          Effect: Allow
+          Principal:
+            Service: ssm.amazonaws.com
+          Action: s3:GetBucketAcl
+          Resource: !GetAtt ResouceSyncBucket.Arn
+        - Sid: SSMBucketDelivery
+          Effect: Allow
+          Principal:
+            Service: ssm.amazonaws.com
+          Action: s3:PutObject
+          Resource: !Sub arn:aws:s3:::${ResouceSyncBucket}/*
+          Condition:
+            StringEquals:
+              s3:x-amz-server-side-encryption: aws:kms
+              s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt ManagedInstanceDataEncryptionKey.Arn
+              # s3:x-amz-acl: bucket-owner-full-control
+              # s3:RequestObjectTag/OrgId: !Ref OrganizationId
+        - Sid: SSMWrite
+          Effect: Allow
+          Principal: "*"
+          Action: s3:PutObject
+          Resource: !Sub arn:aws:s3:::${ResouceSyncBucket}/*
+          Condition:
+            StringEquals:
+              aws:PrincipalOrgID: !Ref OrganizationId
+        - Sid: SSMBucketDeliveryTagging
+          Effect: Allow
+          Principal:
+            Service: ssm.amazonaws.com
+          Action: s3:PutObjectTagging
+          Resource: !Sub arn:aws:s3:::${ResouceSyncBucket}/*/accountid=*/*
+          
+  #-------------------------------------------------
+  # Bucket used to store instance execution logs
+  #-------------------------------------------------
+  ExecutionLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'ssm-execution-logs-${AWS::Region}-${AWS::AccountId}'
+      AccessControl: BucketOwnerFullControl
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: !Ref TagName
+          Value: !Ref TagValue
+          
+  #-------------------------------------------------
+  # Bucket policy to add to S3 bucket to store execution logs
+  #-------------------------------------------------
+  ExecutionLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ExecutionLogsBucket
+      PolicyDocument:
+        Statement:
+        - Sid: SSMWrite
+          Effect: Allow
+          Principal: "*"
+          Action: 
+            - s3:PutObject
+            - s3:PutObjectAcl
+          Resource: 
+            - !Join [ '', [!GetAtt ExecutionLogsBucket.Arn, '/*'] ]
+          Condition:
+            StringEquals:
+              aws:PrincipalOrgID: !Ref OrganizationId
+
+  #-------------------------------------------------
+  #
+  # Automation Administration role for multi-account/Region Automation capabilities
+  #
+  #-------------------------------------------------
+  AutomationAdministrationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AWS-SystemsManager-AutomationAdministrationRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ssm.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: AssumeRole-AWSSystemsManagerAutomationExecutionRole
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - sts:AssumeRole
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:iam::*:role/AWS-SystemsManager-AutomationExecutionRole
+          - Effect: Allow
+            Action:
+            - organizations:ListAccountsForParent
+            Resource:
+            - "*"
+
+  #-----------------------------------------------------------
+  #
+  # Configure Glue database, role, and crawler
+  #
+  #-----------------------------------------------------------
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: ssm_global_resource_sync
+        Description: Systems Manager Global Resource Data Sync Database
+  
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      DatabaseName: !Ref GlueDatabase
+      Description: Crawler for AWS Systems Manager Resource Data Sync
+      Name: SSM-GlueCrawler
+      Role: !GetAtt GlueCrawlerRole.Arn
+      Schedule: 
+        ScheduleExpression: 'cron(0 0 * * ? *)'
+      Targets: 
+        S3Targets: 
+          - Path: !Ref ResouceSyncBucket
+            Exclusions:
+              - AWS:InstanceInformation/accountid=*/test.json
+  
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SSM-GlueCrawlerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - glue.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Path: "/service-role/"
+      Description: Role created for Glue to access resource data sync S3 bucket
+      Policies:
+        - PolicyName: S3Actions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub ${ResouceSyncBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt ManagedInstanceDataEncryptionKey.Arn
+
+  #-------------------------------------------------
+  #
+  # The AWS:InstanceInformation table includes a column named
+  # 'resourcetype', which is also a partition key, which causes
+  # Athena queries to fail. The following resources include an
+  # IAM role, a Lambda function, and CloudWatch Event rule, and
+  # a Lambda permission. The CloudWatch Event rule is triggered
+  # by the Glue crawler execution, which then invokes the Lambda
+  # function to delete the column.
+  #
+  #-------------------------------------------------
+  DeleteGlueTableColumnFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SSM-DeleteGlueTableColumnFunctionRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: GlueActions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:GetTable
+                  - glue:UpdateTable
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabase}
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabase}/aws_instanceinformation
+
+  DeleteGlueTableColumnFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: SSM-DeleteGlueTableColumnFunction
+      Description:
+        Deletes the 'resourcetype' Glue table that causes an issue when loading partitions in Athena
+      Runtime: python3.7
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 600
+      Role: !GetAtt DeleteGlueTableColumnFunctionRole.Arn
+      Environment:
+        Variables:
+          CRAWLER_NAME: !Ref GlueCrawler
+          DATABASE_NAME: !Ref GlueDatabase
+      Tags:
+        - Key: !Ref TagName
+          Value: !Ref TagValue
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+
+          CRAWLER_NAME = os.environ['CRAWLER_NAME']
+          DATABASE_NAME = os.environ['DATABASE_NAME']
+          TABLE_NAME = 'aws_instanceinformation'
+          COLUMN_NAME = 'resourcetype'
+
+          glue_client = boto3.client('glue')
+
+          def lambda_handler(event, context):
+
+              print(json.dumps(event, default=str))
+
+              # Get the crawler name from the event.
+              event_crawler_name = event['detail']['crawlerName']
+
+              if event_crawler_name == CRAWLER_NAME:
+                  # This is the crawler we're looking for, so get a reference to the right
+                  # table and delete the column.
+
+                  response = glue_client.get_table(
+                      CatalogId=context.invoked_function_arn.split(":")[4],
+                      DatabaseName=DATABASE_NAME,
+                      Name=TABLE_NAME
+                  )
+
+                  # Update the column name if the table exists.
+                  if response['Table']:
+
+                      table = response['Table']
+
+                      # We have a reference to the table, so get the columns.
+                      columns = table['StorageDescriptor']['Columns']
+
+                      # Remove the unwanted column.
+                      updated_columns = [i for i in columns if not (i['Name'] == COLUMN_NAME)]
+
+                      # Updat the columns for the table object.
+                      table['StorageDescriptor']['Columns'] = updated_columns
+
+                      # Remove unnecessary fields.
+                      table.pop('DatabaseName', None)
+                      table.pop('CreatedBy', None)
+                      table.pop('CreateTime', None)
+                      table.pop('UpdateTime', None)
+                      table.pop('IsRegisteredWithLakeFormation', None)
+
+                      # Update the table with the removed 'resourcetype' column.
+                      response = glue_client.update_table(
+                          CatalogId=context.invoked_function_arn.split(":")[4],
+                          DatabaseName=DATABASE_NAME,
+                          TableInput=table
+                      )
+
+  DeleteGlueTableColumnFunctionEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: SSM-DeleteGlueTableColumn
+      Description: Deletes resourcetype from Glue table
+      EventPattern:
+        source:
+          - aws.glue
+        detail-type:
+          - Glue Crawler State Change
+        detail:
+          state:
+            - Succeeded
+      Targets:
+        - Arn: !GetAtt DeleteGlueTableColumnFunction.Arn
+          Id: "TargetFunctionV1"
+
+  DeleteGlueTableColumnFunctionCloudWatchPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DeleteGlueTableColumnFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DeleteGlueTableColumnFunctionEventRule.Arn
+
+  #-------------------------------------------------
+  # Bucket used to store Athena query details
+  #-------------------------------------------------
+  AthenaQueryResultsBucket:
+    Type: AWS::S3::Bucket
+    # DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub ssm-resource-sync-athena-query-results-${AWS::Region}-${AWS::AccountId}
+      AccessControl: BucketOwnerFullControl
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !Ref ManagedInstanceDataEncryptionKey
+              SSEAlgorithm: aws:kms
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: !Ref TagName
+          Value: !Ref TagValue
+
+  #-----------------------------------------------------------
+  # Create Athena named queries.
+  #-----------------------------------------------------------
+
+  AthenaQueryNonCompliantPatch:
+    Type: AWS::Athena::NamedQuery
+    Properties: 
+      Database: !Join [ '-', [!Ref ResouceSyncBucket, 'database'] ]
+      Description: Example query to list managed instances that are non-compliant for patching.
+      Name: QueryNonCompliantPatch
+      QueryString: |
+        SELECT 
+          * 
+        FROM 
+          aws_complianceitem 
+        WHERE 
+          status='NON_COMPLIANT' AND compliancetype='Patch' 
+        LIMIT 20
+  AthenaQuerySSMAgent:
+    Type: AWS::Athena::NamedQuery
+    Properties: 
+      Database: !Join [ '-', [!Ref ResouceSyncBucket, 'database'] ]
+      Description: Example query to list SSM Agent versions installed on managed instances.
+      Name: QuerySSMAgentVersion
+      QueryString: |
+        SELECT
+          *
+        FROM
+          aws_application 
+        WHERE 
+          name='Amazon SSM Agent' OR name='amazon-ssm-agent' 
+        LIMIT 20;
+  AthenaQueryInstanceList:
+    Type: AWS::Athena::NamedQuery
+    Properties: 
+      Database: !Join [ '-', [!Ref ResouceSyncBucket, 'database'] ]
+      Description: Example query to return a list of non-terminated instances.
+      Name: QueryInstanceList
+      QueryString: |
+        SELECT 
+          * 
+        FROM 
+          aws_instanceinformation 
+        WHERE 
+          instancestatus IS NULL;
+  AthenaQueryInstanceApplications:
+    Type: AWS::Athena::NamedQuery
+    Properties: 
+      Database: !Join [ '-', [!Ref ResouceSyncBucket, 'database'] ]
+      Description: Example query to return a list of non-terminated instances and their applications installed.
+      Name: QueryInstanceApplications
+      QueryString: |
+        SELECT
+          name,applicationtype,publisher,version,instanceid
+        FROM
+          aws_application, aws_instanceinformation
+        WHERE
+          aws_instanceinformation.instancestatus IS NULL;
+Outputs:
+  ResouceSyncBucketName:
+    Description: The name of the S3 bucket used to store resource data sync details.
+    Value: !Ref ResouceSyncBucket
+  ExecutionLogsBucketName:
+    Description: The name of the S3 bucket used to store execution logs centrally.
+    Value: !Ref ExecutionLogsBucket
+  ManagedInstanceDataEncryptionKey:
+    Description: The ARN of the KMS key used to encrypt resource data sync logs.
+    Value: !GetAtt ManagedInstanceDataEncryptionKey.Arn
