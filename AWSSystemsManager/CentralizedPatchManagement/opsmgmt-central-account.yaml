@@ -432,6 +432,7 @@ Resources:
                       table.pop('CreateTime', None)
                       table.pop('UpdateTime', None)
                       table.pop('IsRegisteredWithLakeFormation', None)
+                      table.pop('CatalogId', None)
 
                       # Update the table with the removed 'resourcetype' column.
                       response = glue_client.update_table(
