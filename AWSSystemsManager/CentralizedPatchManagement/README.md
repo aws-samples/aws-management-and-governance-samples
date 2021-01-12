@@ -20,7 +20,7 @@ The purpose of this series of CloudFormation templates is to setup a scheduled m
 - [Resources Created - Central Account](#resources-created---central-account)
 - [Resources Created - Target Account(s)](#resources-created---target-accounts)
 - [Deployment Instructions](#deployment-instructions)
-  - [Create the CloudFormation Stacks in the Central Account](#create-the-cloudformation-stack-in-the-central-account)
+  - [Create the CloudFormation Stacks in the Central Account](#create-the-cloudformation-stacks-in-the-central-account)
   - [Create the CloudFormation StackSet in the Central Account](#create-the-cloudFormation-stackset-in-the-central-account)
   - [(Optional) Deploy test instances](#optional-deploy-test-instances)
 - [Post-Deployment Instructions](#post-deployment-instructions)
@@ -32,11 +32,9 @@ The purpose of this series of CloudFormation templates is to setup a scheduled m
   - [Remove resources from the Central Account](#remove-resources-from-the-central-account)
     - [Empty the S3 Bucket](#empty-the-s3-bucket)
     - [Delete the Database and Tables in AWS Glue](#delete-the-database-and-tables-in-aws-glue)
-    - [Remove the CloudFormation stack in the Central Account](#remove-the-cloudFormation-stack-in-the-central-account)
+    - [Remove the CloudFormation stack in the Central Account](#remove-the-cloudformation-stack-and-stackset-in-the-central-account)
 - [Related References](#related-references)
 - [Change Log](#change-log)
-- [Roadmap Improvements](#roadmap-improvements)
-- [FAQ](#faq)
 - [Example IAM Policies and Trust Relationships](#example-iam-policies-and-trust-relationships)
 
 # Service Concepts
@@ -453,6 +451,12 @@ In order to remove the CloudFormation stack in the central account, you must fir
 [Amazon S3 Pricing](https://aws.amazon.com/s3/pricing/)
 
 [Amazon CloudWatch Pricing](https://aws.amazon.com/cloudwatch/pricing/)
+
+# Change Log
+
+Change  | Description | Date
+------------- | -------------
+Package is live  | The first release of the package has been made available publicly. | 2020-12-17
 
 # Example IAM Policies and Trust Relationships
 
