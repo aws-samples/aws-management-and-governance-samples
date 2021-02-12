@@ -1,0 +1,136 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template for StackSet - Launch Lambda functions into Org. child accounts that will be triggered by SNS Topic and update SSM Document permissions
+Parameters:
+  SNSTopicArn:
+    Type: String
+    Description: Provide an SNS Topic ARN to trigger Lambda
+  SNSTopicRegion:
+    Type: String
+    Description: Enter the region the SNS Topic was created in (ex. us-east-1)
+Resources:
+  LambdaGetAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+            - sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: 2012-10-17
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - ssm:ModifyDocumentPermission
+              Resource: !Sub 'arn:aws:ssm:*:${AWS::AccountId}:document/*'
+            - Effect: Allow
+              Action:
+                - ssm:ListDocuments
+              Resource: '*'
+          PolicyName: LambdaSSMPolicy
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+          PolicyName: LambdaBasicExecPolicy
+
+  LambdaInvokePermission: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn:  !Ref SNSTopicArn 
+      FunctionName: !Ref LambdaUpdatePermissions
+
+  LambdaSNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties: 
+      Region: !Ref SNSTopicRegion
+      Protocol: lambda
+      Endpoint: !GetAtt LambdaUpdatePermissions.Arn
+      TopicArn: !Ref SNSTopicArn
+
+  LambdaUpdatePermissions:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs12.x
+      Role: !GetAtt LambdaGetAccountRole.Arn
+      Handler: index.handler
+      Code:
+        ZipFile: |
+          var AWS = require("aws-sdk");
+          var ssm = new AWS.SSM();
+          exports.handler = function(event, context, callback) {
+              var message = JSON.parse(event.Records[0].Sns.Message);
+              var accountid = message.accountid.result;
+              var type = message.type;
+              var params = {
+                  Filters: [
+                  {
+                      Key: 'Owner',
+                      Values: [
+                          'Self'
+                      ]
+                  }
+                  ] 
+              }; 
+              ssm.listDocuments(params, function(err, data) {
+              if (err) 
+              {
+                  callback(null, err.toString());
+              }
+              else     
+              {
+                  for (var i = 0; i < data.DocumentIdentifiers.length; i++)
+                  {
+                      var paramsModify = "";
+                      if (type == "ADD")
+                      {
+                      paramsModify = {
+                          Name: data.DocumentIdentifiers[i].Name, 
+                          PermissionType: 'Share', 
+                          AccountIdsToAdd: [
+                              accountid
+                          ]
+                      };
+                      }
+                      else if (type == "REMOVE")
+                      {
+                      paramsModify = {
+                          Name: data.DocumentIdentifiers[i].Name, 
+                          PermissionType: 'Share', 
+                          AccountIdsToRemove: [
+                              accountid
+                          ]
+                      };
+                      }
+                      ssm.modifyDocumentPermission(paramsModify, function(err, data2) {
+                      if (err) 
+                      {
+                          callback(null, err.toString()); // an error occurred
+                      }
+                      else     
+                      {
+                          console.log(JSON.stringify(data2));
+                      }
+                  });
+              } 
+          }
+          });
+          };
+
+      Description: Lambda function to update SSM Document permissions with new a new AWS Account ID
