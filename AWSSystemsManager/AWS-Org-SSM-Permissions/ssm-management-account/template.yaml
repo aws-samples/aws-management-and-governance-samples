@@ -1,0 +1,371 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Triggers a workflow to update SSM Document permissions when a new account is added to AWS Organizations
+
+  SAM Template for ssm-account-share
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 60
+
+Parameters:
+  AccountTwoID:
+    Description: Enter the 12-digit child Account ID to give access to an SNS topic
+    Default: 000000000000
+    Type: String
+
+Resources:
+  LambdaGetAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: 2012-10-17
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - organizations:DescribeCreateAccountStatus
+                Resource: '*'
+          PolicyName: LambdaOrgPolicy
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+          PolicyName: LambdaBasicExecPolicy
+  
+  StepFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+
+  EventBridgeRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Event Rule - New Account Created"
+      EventPattern: 
+        source:
+          - aws.organizations
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - organizations.amazonaws.com
+          eventName:
+            - CreateAccount
+      State: 'ENABLED'
+      Targets:
+        - Arn: !Ref LambdaAccountStateMachine
+          Id: 'TargetStateMachine'
+          RoleArn: !GetAtt StepFunctionInvokeRole.Arn
+
+  EventBridgeRule2: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Event Rule - Account Invited to Organization"
+      EventPattern: 
+        source:
+          - aws.organizations
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - organizations.amazonaws.com
+          eventName:
+            - InviteAccountToOrganization
+      State: 'ENABLED'
+      Targets:
+        - Arn: !Ref LambdaAccountStateMachine
+          Id: 'TargetStateMachine'
+          RoleArn: !GetAtt StepFunctionInvokeRole.Arn
+
+  StepFunctionInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: StepFunctionInvokePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Ref LambdaAccountStateMachine
+
+  LambdaSNSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: 2012-10-17
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopic
+          PolicyName: LambdaSNSPolicy
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+          PolicyName: LambdaBasicExecPolicy
+        
+  LambdaInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt LambdaGetAccountID.Arn
+                  - !GetAtt LambdaPublishAccountID.Arn
+                  - !GetAtt LambdaInvitationTest.Arn
+        - PolicyName: StepCloudwatchWrite
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+
+  StepFunctionInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: StepFunctionInvokePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Ref LambdaAccountStateMachine
+
+  LambdaGetAccountID:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: getaccountid/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Role: !GetAtt LambdaGetAccountRole.Arn
+
+  LambdaPublishAccountID:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: publishaccountid/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Role: !GetAtt LambdaSNSRole.Arn
+      Environment:
+        Variables:
+          SNS_ARN: !Ref SNSTopic
+
+  LambdaInvitationTest:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: invitationtest/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Role: !GetAtt LambdaSNSRole.Arn
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub 'SSM-Account-Permissions'
+      TopicName: !Sub 'SSM-Account-Permissions'
+
+  SNSPolicy:
+      Type: AWS::SNS::TopicPolicy
+      Properties:
+        Topics:
+        - !Ref SNSTopic
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+            - SNS:Publish
+            - SNS:RemovePermission
+            - SNS:SetTopicAttributes
+            - SNS:DeleteTopic
+            - SNS:ListSubscriptionsByTopic
+            - SNS:GetTopicAttributes
+            - SNS:Receive
+            - SNS:AddPermission
+            - SNS:Subscribe
+            Resource: !Sub "${SNSTopic}"
+            Condition:
+              StringEquals:
+                AWS:SourceOwner: !Sub '${AWS::AccountId}'
+          - Effect: Allow
+            Action: 
+            - SNS:Subscribe
+            - SNS:Receive
+            Sid: '2'
+            Resource: !Sub "${SNSTopic}"
+            Principal:
+              AWS: !Sub arn:aws:iam::${AccountTwoID}:root
+
+  LambdaAccountStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: SSMStateMachine
+      StateMachineType: STANDARD
+      LoggingConfiguration:
+        Level: ERROR
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StepFunctionLogGroup.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "An example of the Amazon States Language using a choice state.",
+          "StartAt": "InvitationTest",
+          "States": {
+            "InvitationTest": {
+              "Type": "Task",
+              "InputPath": "$",
+              "Resource": "${LambdaInvitationTest.Arn}",
+              "ResultPath": "$.data.lambdaresult",
+              "Next": "NewOrInvite"
+            },
+            "NewOrInvite": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.data.lambdaresult.state",
+                  "StringEquals": "NEW",
+                  "Next": "GetAccountId"
+                },
+                {
+                  "Not": {
+                    "Variable": "$.data.lambdaresult.state",
+                    "StringEquals": "NEW"
+                  },
+                  "Next": "AddAccountId"
+                }
+              ]
+            },
+            "GetAccountId": {
+              "Type": "Task",
+              "InputPath": "$.detail.responseElements.createAccountStatus",
+              "Resource": "${LambdaGetAccountID.Arn}",
+              "ResultPath": "$.data.lambdaresult",
+              "Next": "ChoiceState"
+            },
+            "ChoiceState": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.data.lambdaresult.state",
+                  "StringEquals": "IN_PROGRESS",
+                  "Next": "GetAccountId"
+                },
+                {
+                  "Variable": "$.data.lambdaresult.state",
+                  "StringEquals": "FAILED",
+                  "Next": "FailedAccountCreation"
+                },
+                {
+                  "Variable": "$.data.lambdaresult.state",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "AddAccountId"
+                }
+              ]
+            },
+            "AddAccountId": {
+              "Type": "Task",
+              "Parameters": {
+                "accountid.$": "$.data.lambdaresult",
+                "type":"ADD"
+              },
+              "Resource": "${LambdaPublishAccountID.Arn}",
+              "End": true
+            },
+            "FailedAccountCreation": {
+              "Type": "Fail"
+            }
+          }
+        }
+      RoleArn: !GetAtt LambdaInvokeRole.Arn
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  SNSTopicARN:
+    Description: SNS Topic ARN - parameter for ssm-child-accounts template
+    Value: !Ref SNSTopic
+
