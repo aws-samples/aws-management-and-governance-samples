@@ -141,7 +141,7 @@ Register your EC2 instance or on-premise hybrid instances. For more information,
 
 ### Targeting Limitations
 - You can only target one Resource Group.
-- Multi-account and multi-Region Automation can target AWS Account IDs or AWS Organization OU IDs. If you want to target Organization OU IDs, then the central account CloudFormation stack must be created within the master Organizations account.
+- Multi-account and multi-Region Automation can target AWS Account IDs or AWS Organization OU IDs. If you want to target Organization OU IDs, then the central account CloudFormation stack must be either (1) created within the root Organizations account or (2) created within an account specified as the Delegated Administrator account. An account can be specified as a Delegated Administrator account within the Systems Manager Explorer settings, for more information see [Configuring a Delegated Administrator](https://docs.aws.amazon.com/systems-manager/latest/userguide/Explorer-setup-delegated-administrator.html).
    - When targeting using Organization OU IDs, you must target the OU which contains AWS accounts IDs directly. You cannot specify an OU which contains further nested OUs. For example, in the following screenshot you can see a simple Organization tree where the ```DEV``` OU contains a single account. When calling a multi-account/multi-Region Automation workflow, you must target the ```DEV``` OU and cannot target parent OUs, such as ```Workloads``` or ```Root```.
    ![](images/opsmgmt-orgtree.png)
 - To target resource tags instead of Resource Groups, you must modify the Automation document in the CloudFormation template, ```opsmgmt-operations-central-account.yaml```. An example modification is as follows:
