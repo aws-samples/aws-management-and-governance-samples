@@ -473,7 +473,7 @@ Resources:
     Type: AWS::S3::Bucket
     # DeletionPolicy: Retain
     Properties:
-      BucketName: !Sub ssm-resource-sync-athena-query-results-${AWS::Region}-${AWS::AccountId}
+      BucketName: !Sub ssm-res-sync-athena-query-results-${AWS::Region}-${AWS::AccountId}
       AccessControl: BucketOwnerFullControl
       BucketEncryption:
         ServerSideEncryptionConfiguration:
