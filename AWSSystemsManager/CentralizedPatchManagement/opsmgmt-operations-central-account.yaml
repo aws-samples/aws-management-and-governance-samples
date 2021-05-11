@@ -194,9 +194,6 @@ Resources:
               RunPatchBaselineOperation=os.environ['RunPatchBaselineOperation']
               RunPatchBaselineRebootOption=os.environ['RunPatchBaselineRebootOption']
               RunPatchBaselineInstallOverrideList=os.environ['RunPatchBaselineInstallOverrideList']
-              ResourceGroupName=os.environ['ResourceGroupName']
-              MaximumConcurrency=os.environ['MaximumConcurrency']
-              MaximumErrors=os.environ['MaximumErrors']
               TargetLocationMaxConcurrency=os.environ['TargetLocationMaxConcurrency']
               TargetLocationMaxErrors=os.environ['TargetLocationMaxErrors']
               ExecutionRoleName=os.environ['ExecutionRoleName']
@@ -252,9 +249,6 @@ Resources:
             RunPatchBaselineOperation: !Ref RunPatchBaselineOperation
             RunPatchBaselineRebootOption: !Ref RunPatchBaselineRebootOption
             RunPatchBaselineInstallOverrideList: !Ref RunPatchBaselineInstallOverrideList
-            ResourceGroupName: !Ref ResourceGroupName
-            MaximumConcurrency: !Ref MaximumConcurrency
-            MaximumErrors: !Ref MaximumErrors
             TargetLocationMaxConcurrency: !Ref TargetLocationMaxConcurrency
             TargetLocationMaxErrors: !Ref TargetLocationMaxErrors
             ExecutionRoleName: !Ref ExecutionRoleName

@@ -2,7 +2,7 @@
 
 # Overview
 
-The purpose of this series of CloudFormation templates is to setup a scheduled multi-account and multi-Region (MAMR) patching operation using CloudWatch Events, Lambda, and Systems Manager Automation. Additionally, Systems Manager Inventory is enabled using a State Manager association. The patching, inventory, and compliance data gathered can then be queried and reported on using Amazon Athena or Amazon QuickSight.
+The purpose of this series of AWS CloudFormation templates is to setup a scheduled multi-account and multi-Region (MAMR) patching operation using Amazon EventBridge rules, AWS Lambda, and AWS Systems Manager Automation. Additionally, Systems Manager Inventory is enabled using a State Manager association. The patching, inventory, and compliance data gathered can then be queried and reported on using Amazon Athena or Amazon QuickSight.
 
 # Table of Contents
 
@@ -58,7 +58,7 @@ In this section, we take a closer look at the following concepts of AWS Systems 
 
 ## Resulting Environment
 
-After deploying the provided CloudFormation templates in the central account and target account(s), you will have a scheduled CloudWatch Event. The CloudWatch Event will then invoke a Lambda function to call a multi-account and multi-region Automation operation for patching managed instances using the Command document ```AWS-RunPatchBaseline```. After the first execution of the CloudWatch Event (based on the schedule provided), patching and the resulting patch compliance data will be available for your targeted managed instances.
+After deploying the provided CloudFormation templates in the central account and target account(s), you will have a scheduled CloudWatch Event. The CloudWatch Event will then invoke a Lambda function to call a multi-account and multi-region Automation operation for patching managed instances using the Command document ```AWS-RunPatchBaseline```. After the first execution of the CloudWatch Event (based on the schedule provided), patching and the resulting patch compliance data will be available for your targeted managed instances. An alternative to an EventBridge rule, you can use a [Systems Manager Maintenance Window](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-maintenance.html) as the scheduling mechanism for the multi-account patching operation.
 
 The default option for the patching operation is to scan for missing updates. You can optionally choose the ```Install``` operation when deploying the CloudFormation template which will scan and install any missing updates on the target managed instances. During the patching operation, the managed instance will scan (or install) patches based on the patch baseline approval rules. For more information, see [About Predefined and Custom Patch Baselines](https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-patch-baselines.html) and [About Patch Groups](https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-patch-patchgroups.html). To create a custom patch baseline, see [Create a Custom Patch Baseline](https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-patch-baseline-console.html).
 
