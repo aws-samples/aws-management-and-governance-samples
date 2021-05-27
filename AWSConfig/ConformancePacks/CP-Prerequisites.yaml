@@ -25,6 +25,11 @@ Resources:
     Type: 'AWS::S3::Bucket'
     Properties:
       BucketName: !Ref CPBucketName
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+
   CPBucketPolicy:
     Type: 'AWS::S3::BucketPolicy'
     Properties:
