@@ -1,0 +1,234 @@
+{
+    "Description": "AWS CloudFormation template to create custom AWS Config rules. You will be billed for the AWS resources used if you create a stack from this template.",
+    "Parameters": {
+        "Description": {
+            "MinLength": "1",
+            "Type": "String",
+            "Description": "Description of the Rule",
+            "Default": "Checks replication status of a machine in Cloud Endure",
+            "MaxLength": "255"
+        },
+        "SourceBucket": {
+            "MinLength": "1",
+            "Type": "String",
+            "Description": "Name of the S3 bucket that you have stored the rule zip files in. For example : example-bucket",
+            "MaxLength": "255"
+        },
+        "SourcePath": {
+            "MinLength": "1",
+            "Type": "String",
+            "Description": " path to the s3 bucket and location where you have stored the rule zip files. For example: /myrulefolder/mylambdacode.zip",
+            "MaxLength": "255",
+            "Default": "CloudEndureReplicationCheck.zip"
+        },
+        "SourceHandler": {
+            "Type": "String",
+            "Description": "Lambda Function Handler", 
+            "Default": "CloudEndureReplicationCheck.lambda_handler"
+        },
+        "SourceEvents": {
+            "Type": "CommaDelimitedList",
+            "Description": "Event Type. This should be ec2 and SSM Managed instance to check on-premise resources",
+            "Default": "AWS::EC2::Instance,AWS::SSM::ManagedInstanceInventory"
+        },
+        "Timeout": {
+            "Default": 300,
+            "Type": "String",
+            "Description": "Lambda Function timeout"
+        },
+        "RuleName": {
+            "MinLength": "1",
+            "Type": "String",
+            "Description": "Name of the Rule",
+            "MaxLength": "255", 
+            "Default": "CloudEndureCheckReplication"
+        },
+        "LambdaFunctionName": {
+            "MinLength": "1",
+            "Type": "String",
+            "Description": "Name of the LambdaFunction",
+            "MaxLength": "255", 
+            "Default": "CloudEndureCheckReplication"
+        },
+        "SourceInputParameters": {
+            "Default": "{\"project\": \"my-project\", \"apiToken\": \"REPLACE-WITH-API-TOKEN-FROM-CLOUD-ENDURE\"}",
+            "Type": "String",
+            "Description": "Enter the CloudEndure project name and API Token. This is for demo purposes. The API Token should be stored encrypted in a credential platform like Parameter Store or Secrets Manager "
+        }
+    },
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Outputs": {
+        "RuleCodeLambda": {
+            "Description": "ARN for the Rule Code lambda",
+            "Value": {
+                "Fn::GetAtt": [
+                    "RuleCodeLambda",
+                    "Arn"
+                ]
+            }
+        }
+    },
+    "Resources": {
+        "RuleCodeLambda": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Code": {
+                    "S3Bucket": {
+                        "Ref": "SourceBucket"
+                    },
+                    "S3Key": {"Ref": "SourcePath"}
+                },
+                "FunctionName": {"Ref": "LambdaFunctionName"},
+                "MemorySize": "256",
+                "Handler": {
+                    "Ref": "SourceHandler"
+                },
+                "Role":  {"Fn::GetAtt": [ "LambdaRole", "Arn"]},
+                "Timeout": {
+                    "Ref": "Timeout"
+                },
+                "Runtime": "python3.7",
+                "Description": "Create a new AWS lambda function for rule code"
+            },
+            "DependsOn": "LambdaRole"
+        },
+        "ConfigRule": {
+            "Type": "AWS::Config::ConfigRule",
+            "Properties": {
+                "Source": {
+                        "Owner": "CUSTOM_LAMBDA",
+                        "SourceIdentifier": {
+                            "Fn::GetAtt": [
+                                "RuleCodeLambda",
+                                "Arn"
+                            ]
+                        },
+                        "SourceDetails":[
+                            {
+                                "EventSource": "aws.config",
+                                "MessageType": "ConfigurationItemChangeNotification"
+                            },
+                            {
+                                "EventSource": "aws.config",
+                                "MessageType": "ScheduledNotification",
+                                "MaximumExecutionFrequency": "One_Hour" 
+                            }
+                        ]
+                },
+                "Scope": {
+                    "ComplianceResourceTypes": {
+                        "Ref": "SourceEvents"
+                    }
+                        
+                },
+                "InputParameters": {
+                    "Ref": "SourceInputParameters"
+                },
+                "Description": {
+                    "Ref": "Description"
+                },
+                "ConfigRuleName": {
+                    "Ref": "RuleName"
+                }
+            },
+            "DependsOn": [
+                "ConfigPermissionToCallRuleCodeLambda"
+            ]
+        },
+        "LambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "ManagedPolicyArns": [
+                    {
+                        "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/ReadOnlyAccess"
+                    }
+                ],
+                "Policies": [
+                    {
+                        "PolicyName": "ConfigRulePolicy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Action": [
+                                        "s3:GetObject"
+                                    ],
+                                    "Resource": {
+                                        "Fn::Sub": "arn:${AWS::Partition}:s3:::${SourceBucket}/${SourcePath}"
+                                    },
+                                    "Effect": "Allow",
+                                    "Sid": "1"
+                                },
+                                {
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents",
+                                        "logs:DescribeLogStreams"
+                                    ],
+                                    "Resource": "*",
+                                    "Effect": "Allow",
+                                    "Sid": "2"
+                                },
+                                {
+                                    "Action": [
+                                        "config:PutEvaluations",
+                                        "config:StartConfigRulesEvaluation"
+                                    ],
+                                    "Resource": "*",
+                                    "Effect": "Allow",
+                                    "Sid": "3"
+                                },
+                                {
+                                    "Action": [
+                                        "iam:List*",
+                                        "iam:Describe*",
+                                        "iam:Get*"
+                                    ],
+                                    "Resource": "*",
+                                    "Effect": "Allow",
+                                    "Sid": "4"
+                                },
+                                {
+                                    "Action": [
+                                        "sts:AssumeRole"
+                                    ],
+                                    "Resource": "*",
+                                    "Effect": "Allow",
+                                    "Sid": "5"
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": "sts:AssumeRole",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Effect": "Allow",
+                            "Sid": "AllowLambdaAssumeRole"
+                        }
+                    ]
+                }
+            }
+        },
+        "ConfigPermissionToCallRuleCodeLambda": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "Action": "lambda:InvokeFunction",
+                "FunctionName": {
+                    "Fn::GetAtt": [
+                        "RuleCodeLambda",
+                        "Arn"
+                    ]
+                },
+                "Principal": "config.amazonaws.com"
+            },
+            "DependsOn": "RuleCodeLambda"
+        }
+    }
+}
