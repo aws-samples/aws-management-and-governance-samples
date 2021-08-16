@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Lambda function backing custom Config rules for OPA policy evaluation
+
+Parameters:
+  AssetsBucket:
+    Description: S3 bucket name where the Lambda sources are stored
+    Type: String
+  LambdaAssetsS3Prefix:
+    Description: S3 key prefix where lambda layer files are stored. (e.g. packaged_lambda_assets/)
+    Type: String
+    Default: packaged_lambda_assets/
+  LambdaLayerS3Key:
+    Description: S3 Key for lambda layer archive
+    Type: String
+    Default: opa.zip
+  LambdaSourcesS3Key:
+    Description: S3 Key for lambda function source code
+    Type: String
+    Default: sources.zip
+  LambdaLoggingLevel:
+    Default: DEBUG
+    Description: Python logging level for Lambda functions
+    Type: String
+  LayerBinaryPath:
+    Default: /opt/opa/bin
+    Description: Filesystem path for OPA binary
+    Type: String
+  LayerLibrariesPath:
+    Default: /opt/opa/lib
+    Description: Filesystem path for shared libraries
+    Type: String
+
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject*
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${AssetsBucket}/*'
+              - Effect: Allow
+                Action: config:PutEvaluations
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: opa_lambda.lambda_handler
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.8
+      Timeout: 600
+      Code:
+        S3Bucket: !Ref AssetsBucket
+        S3Key: !Sub '${LambdaAssetsS3Prefix}${LambdaSourcesS3Key}'
+      Environment:
+        Variables:
+          LOGGING_LEVEL: !Ref LambdaLoggingLevel
+          LD_LIBRARY_PATH: !Sub '$LD_LIBRARY_PATH:${LayerLibrariesPath}'
+          PATH: !Sub '$PATH:${LayerBinaryPath}'
+      Layers:
+        - !Ref OpaLayer
+
+  LambdaInvokePermissionsForConfig:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+
+  OpaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.6
+        - python3.7
+        - python3.8
+      Content:
+        S3Bucket: !Ref AssetsBucket
+        S3Key: !Sub '${LambdaAssetsS3Prefix}${LambdaLayerS3Key}'
+      Description: OPA layer for custom Config rules lambda
+      LayerName: opa-layer
+
+Outputs:
+  LambdaArn:
+    Description: The ARN of the Lambda function
+    Value: !GetAtt LambdaFunction.Arn
+    Export:
+      Name: opa-lambda-arn
