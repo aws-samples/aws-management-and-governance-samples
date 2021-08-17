@@ -1,0 +1,829 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates an AWS SSM Automation Runbook to Setup AWS Config with Athena and QuickSights
+
+Resources:
+  SSMAutomationDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      DocumentFormat: YAML
+      Name: Config-QuickSight-Visualization
+      Content:
+        description: |-
+          ## AWS SSM Automation Runbook to Setup AWS Config with Amazon Athena and Amazon QuickSights
+          
+          This solution is based on the blog [Visualizing AWS Config data using Amazon Athena and Amazon QuickSight](https://aws.amazon.com/blogs/mt/visualizing-aws-config-data-using-amazon-athena-and-amazon-quicksight/).
+
+          ---
+          ### Prerequisite
+          1.  Configure [Delivering Configuration Snapshot to an Amazon S3 Bucket](https://docs.aws.amazon.com/config/latest/developerguide/deliver-snapshot-cli.html) for AWS.
+          1.  Ensure access to your S3 Bucket that is used for AWS Config.
+          1.  The S3 Bucket Name used with AWS Config.
+          1.  [Amazon Quicksight Subscription](https://docs.aws.amazon.com/quicksight/latest/user/signing-up.html) enabled in your AWS Account.
+          1.  Grant Amazon QuickSight access to the S3 bucket for AWS Config under Security and Permissions within Amazon Quicksights.
+          1.  The Amazon Quicksight Username.
+
+          ### What does this document do?
+          This document will setup Amazon Athena with AWS Config and setup Amazon Quicksights to be able to create visualize dashboards
+
+          ### Input Parameters
+          * ConfigDeliveryChannelName (Required) Name of your AWS Config Delievery Channel.  The default is set to value of default.
+          * ConfigS3BucketLocation: (Required) AWS Config S3 Bucket Name, this is the name of your S3 Bucket you currently use for AWS Config. (ie config-bucket-1234567891)
+          * QuickSightUserName: (Required) The Amazon QuickSight Username.
+          * AutomationAssumeRole: (Optional) The ARN of the role that allows Automation to perform the actions on your behalf. 
+          * DeleteConfigVisualization: (Optional) Set this to true if you would like to delete the resources created to enable this solution. The default is set to false which will setup the solution. 
+
+        schemaVersion: '0.3'
+        assumeRole: '{{AutomationAssumeRole}}'
+        parameters:
+          ConfigDeliveryChannelName:
+            type: String
+            default: 'default'
+            description: (Required) AWS Config Delivery Channel Name
+          ConfigS3BucketLocation:
+            type: String
+            description: (Required) AWS Config S3 Bucket Name
+          QuickSightUserName:
+            type: String
+            description: (Required) Amazon QuickSight Username
+          AutomationAssumeRole:
+            type: String
+            description: (Optional) The ARN of the role that allows Automation to perform the actions on your behalf. 
+            default: ''
+            allowedPattern: '^arn:aws(-cn|-us-gov)?:iam::\d{12}:role\/[\w+=,.@_\/-]+|^$'
+          DeleteConfigVisualization:
+            type: String
+            default: 'false'
+            allowedValues:
+              - 'true'
+              - 'false'
+        mainSteps:
+          - name: step_deleteconfigvisualization_check
+            action: 'aws:branch'
+            inputs:
+              Choices:
+                - NextStep: create_athena_db
+                  Variable: '{{DeleteConfigVisualization}}'
+                  StringEquals: "false"
+                - NextStep: quicksight_delete_data_set_resource_compliance
+                  Variable: '{{DeleteConfigVisualization}}'
+                  StringEquals: "true"
+          - name: "create_athena_db"
+            action: "aws:executeAwsApi"
+            inputs:
+              Service: "glue"
+              Api: "CreateDatabase"
+              DatabaseInput:
+                  Name: "awsconfig"
+            onFailure: Continue
+          - name: create_config_athena_table
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              QueryString: 'CREATE EXTERNAL TABLE aws_config_configuration_snapshot ( fileversion STRING, configSnapshotId STRING, configurationitems ARRAY < STRUCT < configurationItemVersion : STRING, configurationItemCaptureTime : STRING, configurationStateId : BIGINT, awsAccountId : STRING, configurationItemStatus : STRING, resourceType : STRING, resourceId : STRING, resourceName : STRING, ARN : STRING, awsRegion : STRING, availabilityZone : STRING, configurationStateMd5Hash : STRING, configuration : STRING, supplementaryConfiguration : MAP < STRING, STRING >, tags: MAP < STRING, STRING >, resourceCreationTime : STRING > > ) PARTITIONED BY (accountid STRING, dt STRING, region STRING)  ROW FORMAT SERDE ''org.openx.data.jsonserde.JsonSerDe'' LOCATION ''s3://{{ConfigS3BucketLocation}}/AWSLogs/'';'
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: deploy_lambda_function
+            action: 'aws:createStack'
+            inputs:
+              StackName: AWSConfigLambdaImportSnapshotToAthena
+              TemplateBody: |-
+                AWSTemplateFormatVersion: '2010-09-09'
+                Description: Lambda function for AWS Config Snapshots to Athena
+                Resources:
+                  LambdaExecutionRole:
+                    Type: AWS::IAM::Role
+                    Properties:
+                      AssumeRolePolicyDocument:
+                        Version: '2012-10-17'
+                        Statement:
+                        - Effect: Allow
+                          Principal:
+                            Service:
+                            - lambda.amazonaws.com
+                          Action:
+                          - sts:AssumeRole
+                      Path: "/"
+                      ManagedPolicyArns:
+                        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+                      Policies:
+                      - PolicyName: aws_config_bucket_events_policy
+                        PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                          - Effect: Allow
+                            Action:
+                            - s3:ListBucket
+                            Resource: arn:aws:s3:::{{ConfigS3BucketLocation}}
+                      - PolicyName: aws_config_athena_access
+                        PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                          - Effect: Allow
+                            Action:
+                            - athena:StartQueryExecution
+                            - athena:GetQueryExecution
+                            Resource: 
+                            - arn:aws:athena:{{global:REGION}}:{{global:ACCOUNT_ID}}:workgroup/primary
+                          - Effect: Allow
+                            Action:
+                            - glue:BatchCreatePartition
+                            - glue:GetDatabase
+                            - glue:GetPartitions
+                            - glue:BatchDeletePartition
+                            - glue:GetTable
+                            Resource: 
+                            - arn:aws:glue:{{global:REGION}}:{{global:ACCOUNT_ID}}:catalog
+                            - arn:aws:glue:{{global:REGION}}:{{global:ACCOUNT_ID}}:database/awsconfig
+                            - arn:aws:glue:{{global:REGION}}:{{global:ACCOUNT_ID}}:table/awsconfig/aws_config_configuration_snapshot
+                          - Effect: Allow
+                            Action:
+                            - s3:GetBucketLocation
+                            - s3:GetObject
+                            - s3:ListBucket
+                            - s3:ListBucketMultipartUploads
+                            - s3:ListMultipartUploadParts
+                            - s3:AbortMultipartUpload
+                            - s3:CreateBucket
+                            - s3:PutObject
+                            - s3:PutBucketPublicAccessBlock
+                            Resource: 
+                            - arn:aws:s3:::aws-athena-query-results-*
+                  LambdaFunction:
+                    Type: AWS::Lambda::Function
+                    Properties:
+                      Runtime: python3.8
+                      Description: AWS Config Lambda Function to import snapshot to Athena
+                      FunctionName: aws_config_bucket_events
+                      Role: !GetAtt LambdaExecutionRole.Arn
+                      Handler: index.lambda_handler
+                      Code:
+                        ZipFile: |
+                          import datetime
+                          import re
+                          import boto3
+                          import os
+
+                          TABLE_NAME = 'aws_config_configuration_snapshot'
+                          DATABASE_NAME = 'awsconfig'
+                          ACCOUNT_ID = None # Determined at runtime
+                          LATEST_PARTITION_VALUE = 'latest'
+
+                          athena = boto3.client('athena')
+
+                          def lambda_handler(event, context):
+                              global ACCOUNT_ID
+
+                              object_key = event['Records'][0]['s3']['object']['key']
+                              match = get_configuration_snapshot_object_key_match(object_key)
+                              if match is None:
+                                  print('Ignoring event for non-configuration snapshot object key', object_key)
+                                  return
+                              print('Adding partitions for configuration snapshot object key', object_key)
+                              
+                              ACCOUNT_ID = context.invoked_function_arn.split(':')[4]
+                              object_key_parent = 's3://{bucket_name}/{object_key_parent}/'.format(
+                                  bucket_name=event['Records'][0]['s3']['bucket']['name'],
+                                  object_key_parent=os.path.dirname(object_key))
+                              configuration_snapshot_accountid = get_configuration_snapshot_accountid(match)
+                              configuration_snapshot_region = get_configuration_snapshot_region(match)
+                              configuration_snapshot_date = get_configuration_snapshot_date(match)
+                              
+                              drop_partition(configuration_snapshot_accountid, configuration_snapshot_region, LATEST_PARTITION_VALUE)
+                              add_partition(configuration_snapshot_accountid, configuration_snapshot_region, LATEST_PARTITION_VALUE, object_key_parent)
+                              add_partition(configuration_snapshot_accountid, configuration_snapshot_region, get_configuration_snapshot_date(match).strftime('%Y-%m-%d'), object_key_parent)
+                              
+                          def get_configuration_snapshot_object_key_match(object_key):
+                              # Matches object keys like AWSLogs/123456789012/Config/us-east-1/2018/4/11/ConfigSnapshot/123456789012_Config_us-east-1_ConfigSnapshot_20180411T054711Z_a970aeff-cb3d-4c4e-806b-88fa14702hdb.json.gz
+                              return re.match('^AWSLogs/(\d+)/Config/([\w-]+)/(\d+)/(\d+)/(\d+)/ConfigSnapshot/[^\\\]+$', object_key)
+
+                          def get_configuration_snapshot_accountid(match):
+                              print('AccountId:', match.group(1))
+                              return match.group(1)
+
+                          def get_configuration_snapshot_region(match):
+                              return match.group(1)
+
+                          def get_configuration_snapshot_date(match):
+                              return datetime.date(int(match.group(3)), int(match.group(4)), int(match.group(5)))
+                              
+                          def add_partition(accountid_partition_value, region_partition_value, dt_partition_value, partition_location):
+                              execute_query('ALTER TABLE {table_name} ADD PARTITION {partition} location \'{partition_location}\''.format(
+                                  table_name=TABLE_NAME,
+                                  partition=build_partition_string(accountid_partition_value, region_partition_value, dt_partition_value),
+                                  partition_location=partition_location))
+                                  
+                          def drop_partition(accountid_partition_value, region_partition_value, dt_partition_value):
+                              execute_query('ALTER TABLE {table_name} DROP PARTITION {partition}'.format(
+                                  table_name=TABLE_NAME,
+                                  partition=build_partition_string(accountid_partition_value, region_partition_value, dt_partition_value)))
+                                  
+                          def build_partition_string(accountid_partition_value, region_partition_value, dt_partition_value):
+                              return "(accountid='{accountid_partition_value}', dt='{dt_partition_value}', region='{region_partition_value}')".format(
+                                accountid_partition_value=accountid_partition_value,
+                                  dt_partition_value=dt_partition_value,
+                                  region_partition_value=region_partition_value)
+
+                          def execute_query(query):
+                              print('Executing query:', query)
+                              query_output_location = 's3://aws-athena-query-results-{account_id}-{region}'.format(
+                                  account_id=ACCOUNT_ID,
+                                  region=os.environ['AWS_REGION'])
+                              start_query_response = athena.start_query_execution(
+                                  QueryString=query,
+                                  QueryExecutionContext={
+                                      'Database': DATABASE_NAME
+                                  },
+                                  ResultConfiguration={
+                                      'OutputLocation': query_output_location,
+                                  }
+                              )
+                              print('Query started')
+                              
+                              is_query_running = True
+                              while is_query_running:
+                                  get_query_execution_response = athena.get_query_execution(
+                                      QueryExecutionId=start_query_response['QueryExecutionId']
+                                  )
+                                  query_state = get_query_execution_response['QueryExecution']['Status']['State']
+                                  is_query_running = query_state in ('RUNNING','QUEUED')
+                                  
+                                  if not is_query_running and query_state != 'SUCCEEDED':
+                                      raise Exception('Query failed')
+                              print('Query completed')
+
+                  LambdaInvokePermission:
+                    Type: 'AWS::Lambda::Permission'
+                    Properties:
+                      FunctionName: !GetAtt LambdaFunction.Arn
+                      Action: 'lambda:InvokeFunction'
+                      Principal: s3.amazonaws.com
+                      SourceAccount: !Ref 'AWS::AccountId'
+                      SourceArn: !Sub 'arn:aws:s3:::{{ConfigS3BucketLocation}}'
+              Capabilities:
+                - CAPABILITY_IAM
+            onFailure: Continue
+          - name: AddS3TriggerForLambda
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: s3
+              Api: PutBucketNotificationConfiguration
+              Bucket: '{{ConfigS3BucketLocation}}'
+              NotificationConfiguration:
+                LambdaFunctionConfigurations:
+                  - LambdaFunctionArn: 'arn:aws:lambda:{{global:REGION}}:{{global:ACCOUNT_ID}}:function:aws_config_bucket_events'
+                    Events:
+                      - 's3:ObjectCreated:*'
+            onFailure: Continue
+          - name: create_athena_view_config_resources
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              QueryString: 'CREATE OR REPLACE VIEW v_config_resources AS SELECT DISTINCT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" ,"configurationItem"."resourceid" "ResourceId" ,"configurationItem"."resourcename" "ResourceName" ,"configurationItem"."resourcetype" "ResourceType" ,"configurationItem"."availabilityzone" "AvailabiltyZone" ,"configurationItem"."resourcecreationtime" "CreationTime" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE ("dt" = ''latest'')'
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: create_athena_view_config_ec2_instances
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              QueryString: 'CREATE OR REPLACE VIEW v_config_ec2_instances AS SELECT DISTINCT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" ,"json_extract_scalar"("configurationItem"."configuration", ''$.instanceid'') "InstanceId" ,"configurationItem"."tags"[''name''] "TagName" ,"configurationItem"."configurationitemcapturetime" "LastConfigSnapshot" ,"configurationItem"."resourcecreationtime" "CreationTime" ,"json_extract_scalar"("configurationItem"."configuration", ''$.launchtime'') "LaunchTime" ,"json_extract_scalar"("configurationItem"."configuration", ''$.instancetype'') "InstanceType" ,"json_extract_scalar"("configurationItem"."configuration", ''$.keyname'') "KeyName" ,"json_extract_scalar"("configurationItem"."configuration", ''$.imageid'') "AmiId" ,"json_extract_scalar"("configurationItem"."configuration", ''$.privateipaddress'') "PrivateIp" ,"json_extract_scalar"("configurationItem"."configuration", ''$.publicipaddress'') "PublicIp" ,"json_extract_scalar"("configurationItem"."configuration", ''$.state.name'') "State" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE (("dt" = ''latest'') AND ("configurationItem"."resourcetype" = ''AWS::EC2::Instance''))'
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: create_athena_view_config_ec2_vpcs
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              QueryString: 'CREATE OR REPLACE VIEW v_config_ec2_vpcs AS SELECT DISTINCT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" , "configurationItem"."resourceid" "ResourceId" , "configurationItem"."tags"[''name''] "TagName" , "json_extract_scalar"("configurationItem"."configuration", ''$.isdefault'') "IsDefault" , "json_extract_scalar"("configurationItem"."configuration", ''$.cidrblockassociationset[0].cidrblock'') "CidrBlock0" , "json_extract_scalar"("configurationItem"."configuration", ''$.cidrblockassociationset[1].cidrblock'') "CidrBlock1" , "json_extract_scalar"("configurationItem"."configuration", ''$.cidrblockassociationset[2].cidrblock'') "CidrBlock2" , "json_extract_scalar"("configurationItem"."configuration", ''$.cidrblockassociationset[3].cidrblock'') "CidrBlock3" , "json_extract_scalar"("configurationItem"."configuration", ''$.cidrblockassociationset[4].cidrblock'') "CidrBlock4" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE (("dt" = ''latest'') AND ("configurationItem"."resourcetype" = ''AWS::EC2::VPC''))'
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: create_athena_view_config_rds_dbinstances
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              QueryString: 'CREATE OR REPLACE VIEW v_config_rds_dbinstances AS SELECT DISTINCT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" , "configurationItem"."tags"[''name''] "TagName" , "configurationItem"."configurationitemcapturetime" "LastConfigSnapshot" , "configurationItem"."resourcecreationtime" "CreationTime" , "json_extract_scalar"("configurationItem"."configuration", ''$.endpoint.address'') "EndPoint" , "json_extract_scalar"("configurationItem"."configuration", ''$.engine'') "Engine" , "json_extract_scalar"("configurationItem"."configuration", ''$.deletionprotection'') "DeletionProtection" , "json_extract_scalar"("configurationItem"."configuration", ''$.preferredbackupwindow'') "BackupWindow" , "json_extract_scalar"("configurationItem"."configuration", ''$.backupretentionperiod'') "BackupRetention" , "json_extract_scalar"("configurationItem"."configuration", ''$.dbinstanceclass'') "InstanceType" , "json_extract_scalar"("configurationItem"."configuration", ''$.endpoint.port'') "Port" , "json_extract_scalar"("configurationItem"."configuration", ''$.publiclyaccessible'') "PubliclyAccessible" , "json_extract_scalar"("configurationItem"."configuration", ''$.dbinstancestatus'') "Status" , "json_extract_scalar"("configurationItem"."configuration", ''$.storageencrypted'') "StorageEncrypted"  FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE (("dt" = ''latest'') AND ("configurationItem"."resourcetype" = ''AWS::RDS::DBInstance''))'
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: create_athena_view_config_iam_resources
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              QueryString: 'CREATE OR REPLACE VIEW v_config_iam_resources AS SELECT DISTINCT "configurationItem"."awsAccountId" "AccountId", "configurationItem"."awsregion" "Region" ,"configurationItem"."resourcetype" "Type" ,"configurationItem"."resourcecreationtime" "CreationTime" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE ( ( ("dt" = ''latest'') AND ("region" = ''us-east-1'') ) AND ( ("configurationItem"."resourcetype" = ''AWS::IAM::User'') OR ("configurationItem"."resourcetype" = ''AWS::IAM::Role'') OR ("configurationItem"."resourcetype" = ''AWS::IAM::Policy'') OR ("configurationItem"."resourcetype" = ''AWS::IAM::Group'') ) )'
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: create_athena_view_config_resource_compliance
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              QueryString: 'CREATE OR REPLACE VIEW v_config_resource_compliance AS SELECT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" , "split_part"("configurationItem"."resourceid", ''/'', 1) "ResourceType" , "split_part"("configurationItem"."resourceid", ''/'', 2) "ResourceId" , "json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[0].configrulename'') "ConfigRuleName" , "json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[0].compliancetype'') "ComplianceType" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE ((("configurationItem"."resourcetype" = ''AWS::Config::ResourceCompliance'') AND ("json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[0].configrulename'') IS NOT NULL)) AND ("dt" = ''latest'')) UNION SELECT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" , "split_part"("configurationItem"."resourceid", ''/'', 1) "ResourceType" , "split_part"("configurationItem"."resourceid", ''/'', 2) "ResourceId" , "json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[1].configrulename'') "ConfigRuleName" , "json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[1].compliancetype'') "ComplianceType" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE ((("configurationItem"."resourcetype" = ''AWS::Config::ResourceCompliance'') AND ("json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[0].configrulename'') IS NOT NULL)) AND ("dt" = ''latest'')) UNION SELECT "configurationItem"."awsAccountId" "AccountId" , "configurationItem"."awsregion" "Region" , "split_part"("configurationItem"."resourceid", ''/'', 1) "ResourceType" , "split_part"("configurationItem"."resourceid", ''/'', 2) "ResourceId" , "json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[2].configrulename'') "ConfigRuleName" , "json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[2].compliancetype'') "ComplianceType" FROM awsconfig.aws_config_configuration_snapshot CROSS JOIN UNNEST("configurationitems") t (configurationItem) WHERE ((("configurationItem"."resourcetype" = ''AWS::Config::ResourceCompliance'') AND ("json_extract_scalar"("configurationItem"."configuration", ''$.configrulelist[0].configrulename'') IS NOT NULL)) AND ("dt" = ''latest''))'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: create_athena_view_config_rules_compliance
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: athena
+              Api: StartQueryExecution
+              ResultConfiguration:
+                OutputLocation: 's3://aws-athena-query-results-{{global:ACCOUNT_ID}}-{{global:REGION}}/'
+              QueryString: 'CREATE OR REPLACE VIEW v_config_rules_compliance AS 
+SELECT
+  "configurationItem"."awsAccountId" "AccountId"
+, "configurationItem"."awsregion" "Region"
+, "split_part"("configurationItem"."resourceid", ''/'', 1) "ResourceType"
+, "split_part"("configurationItem"."resourceid", ''/'', 2) "ResourceId"
+, "n"."configrulename" "ConfigRuleName"
+, "n"."compliancetype" "ComplianceType"
+FROM
+  (awsconfig.aws_config_configuration_snapshot
+CROSS JOIN UNNEST("configurationitems") t (configurationItem)),
+UNNEST(CAST("json_extract"("configurationItem"."configuration", ''$.configrulelist'') AS array(row(configruleid varchar,configrulename varchar,configrulearn varchar,compliancetype varchar)))) x (n)
+WHERE ((("configurationItem"."resourcetype" = ''AWS::Config::ResourceCompliance'') AND (n.configrulename IS NOT NULL)) AND ("dt" = ''latest''))'
+              WorkGroup: primary
+              QueryExecutionContext:
+                Database: awsconfig
+                Catalog: AwsDataCatalog
+            onFailure: Continue
+          - name: generate_config_snapshot
+            action: 'aws:executeAwsApi'
+            inputs:
+              Api: DeliverConfigSnapshot
+              Service: config
+              deliveryChannelName: '{{ConfigDeliveryChannelName}}'
+            onFailure: Continue
+          - name: quicksight_create_data_source
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSource
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              Name: aws-config
+              DataSourceId: aws-config
+              Type: ATHENA
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:UpdateDataSourcePermissions'
+                    - 'quicksight:DescribeDataSource'
+                    - 'quicksight:DescribeDataSourcePermissions'
+                    - 'quicksight:PassDataSource'
+                    - 'quicksight:UpdateDataSource'
+                    - 'quicksight:DeleteDataSource'
+            onFailure: Continue
+          - name: quicksight_create_data_set_resources
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_resources
+              Name: v_config_resources
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_resources
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: resourceid
+                        Type: STRING
+                      - Name: resourcename
+                        Type: STRING
+                      - Name: resourcetype
+                        Type: STRING
+                      - Name: availabiltyzone
+                        Type: STRING
+                      - Name: creationtime
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            onFailure: Continue
+          - name: quicksight_create_data_set_ec2_instances
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_ec2_instances
+              Name: v_config_ec2_instances
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_ec2_instances
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: instanceid
+                        Type: STRING
+                      - Name: tagname
+                        Type: STRING
+                      - Name: lastconfigsnapshot
+                        Type: STRING
+                      - Name: creationtime
+                        Type: STRING
+                      - Name: launchtime
+                        Type: STRING
+                      - Name: instancetype
+                        Type: STRING
+                      - Name: keyname
+                        Type: STRING
+                      - Name: amiid
+                        Type: STRING
+                      - Name: privateip
+                        Type: STRING
+                      - Name: publicip
+                        Type: STRING
+                      - Name: state
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            onFailure: Continue
+          - name: quicksight_create_data_set_ec2_vpcs
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_ec2_vpcs
+              Name: v_config_ec2_vpcs
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_ec2_vpcs
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: resourceid
+                        Type: STRING
+                      - Name: tagname
+                        Type: STRING
+                      - Name: isdefault
+                        Type: STRING
+                      - Name: cidrblock0
+                        Type: STRING
+                      - Name: cidrblock1
+                        Type: STRING
+                      - Name: cidrblock2
+                        Type: STRING
+                      - Name: cidrblock3
+                        Type: STRING
+                      - Name: cidrblock4
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            onFailure: Continue
+          - name: quicksight_create_data_set_iam_resources
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_iam_resources
+              Name: v_config_iam_resources
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_iam_resources
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: type
+                        Type: STRING
+                      - Name: creationtime
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            onFailure: Continue
+          - name: quicksight_create_data_set_rds_dbinstances
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_rds_dbinstances
+              Name: v_config_rds_dbinstances
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_rds_dbinstances
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: tagname
+                        Type: STRING
+                      - Name: lastconfigsnapshot
+                        Type: STRING
+                      - Name: creationtime
+                        Type: STRING
+                      - Name: endpoint
+                        Type: STRING
+                      - Name: engine
+                        Type: STRING
+                      - Name: deletionprotection
+                        Type: STRING
+                      - Name: backupwindow
+                        Type: STRING
+                      - Name: backupretention
+                        Type: STRING
+                      - Name: instancetype
+                        Type: STRING
+                      - Name: port
+                        Type: STRING
+                      - Name: publiclyaccessible
+                        Type: STRING
+                      - Name: status
+                        Type: STRING
+                      - Name: storageencrypted
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            onFailure: Continue
+          - name: quicksight_create_data_set_resource_compliance
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_resource_compliance
+              Name: v_config_resource_compliance
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_resource_compliance
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: resourcetype
+                        Type: STRING
+                      - Name: resourceid
+                        Type: STRING
+                      - Name: configrulename
+                        Type: STRING
+                      - Name: compliancetype
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            onFailure: Continue
+          - name: quicksight_create_data_set_rules_compliance
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: CreateDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_rules_compliance
+              Name: v_config_rules_compliance
+              PhysicalTableMap:
+                string:
+                  RelationalTable:
+                    DataSourceArn: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:datasource/aws-config'
+                    Catalog: AWSDataCatalog
+                    Schema: awsconfig
+                    Name: v_config_rules_compliance
+                    InputColumns:
+                      - Name: accountid
+                        Type: STRING
+                      - Name: region
+                        Type: STRING
+                      - Name: resourcetype
+                        Type: STRING
+                      - Name: resourceid
+                        Type: STRING
+                      - Name: configrulename
+                        Type: STRING
+                      - Name: compliancetype
+                        Type: STRING
+              ImportMode: SPICE
+              Permissions:
+                - Principal: 'arn:aws:quicksight:{{global:REGION}}:{{global:ACCOUNT_ID}}:user/default/{{QuickSightUserName}}'
+                  Actions:
+                    - 'quicksight:DescribeDataSet'
+                    - 'quicksight:DescribeDataSetPermissions'
+                    - 'quicksight:PassDataSet'
+                    - 'quicksight:DescribeIngestion'
+                    - 'quicksight:ListIngestions'
+                    - 'quicksight:UpdateDataSet'
+                    - 'quicksight:DeleteDataSet'
+                    - 'quicksight:CreateIngestion'
+                    - 'quicksight:CancelIngestion'
+                    - 'quicksight:UpdateDataSetPermissions'
+            isEnd: true
+            onFailure: Continue
+          - name: quicksight_delete_data_set_resource_compliance
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_resource_compliance
+            onFailure: Continue
+          - name: quicksight_delete_data_set_rules_compliance
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_rules_compliance
+            onFailure: Continue
+          - name: quicksight_delete_data_set_rds_dbinstances
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_rds_dbinstances
+            onFailure: Continue
+          - name: quicksight_delete_data_set_iam_resources
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_iam_resources
+            onFailure: Continue
+          - name: quicksight_delete_data_set_ec2_vpcs
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_ec2_vpcs
+            onFailure: Continue
+          - name: quicksight_delete_data_set_ec2_instances
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_ec2_instances
+            onFailure: Continue
+          - name: quicksight_delete_data_set_resources
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSet
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSetId: v_config_resources
+            onFailure: Continue
+          - name: quicksight_delete_data_source
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: quicksight
+              Api: DeleteDataSource
+              AwsAccountId: '{{global:ACCOUNT_ID}}'
+              DataSourceId: aws-config
+            onFailure: Continue
+          - name: delete_lambda_function
+            action: 'aws:deleteStack'
+            inputs:
+              StackName: AWSConfigLambdaImportSnapshotToAthena
+            onFailure: Continue
+          - name: delete_athena_db
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: glue
+              Api: DeleteDatabase
+              Name: awsconfig
+            isEnd: true
+            onFailure: Continue
