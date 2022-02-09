@@ -277,9 +277,9 @@ AWS Systems Manager Resources:
 
 The stack creation process for the central account will take approximately 5 minutes. Once the status of the stack changes to ```CREATE_COMPLETE```, proceed with the next section.
 
-## Create the CloudFormation StackSet in the Central Account
+## Create the CloudFormation StackSet in the Target Account
 
-1. Open the [CloudFormation console](https://console.aws.amazon.com/cloudformation/) in the central account.
+1. Open the [CloudFormation console](https://console.aws.amazon.com/cloudformation/) in the target account.
 1. From the left navigation pane, choose **StackSets**, and then choose **Create StackSet**.
 1. Select **Create StackSet**.
 1. Choose **Upload a template file** and select ```opsmgmt-target-account.yaml``` from your local machine.
