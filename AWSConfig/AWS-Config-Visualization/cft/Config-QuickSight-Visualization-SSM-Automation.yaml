@@ -208,7 +208,7 @@ Resources:
                               return match.group(1)
 
                           def get_configuration_snapshot_region(match):
-                              return match.group(1)
+                              return match.group(2)
 
                           def get_configuration_snapshot_date(match):
                               return datetime.date(int(match.group(3)), int(match.group(4)), int(match.group(5)))
