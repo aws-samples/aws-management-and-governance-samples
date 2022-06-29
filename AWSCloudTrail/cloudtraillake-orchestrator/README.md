@@ -14,12 +14,25 @@ This solution requires installing a 3rd party package that is not owned or maint
 
 ## Getting started
 
-1. Create a CloudTrail Lake event data store. Get its Arn and update the CloudtraillakeEventDataStoreArn variable in `config.ts`
-2. `cdk deploy`
+1. Create a CloudTrail Lake event data store from the [CloudTrail Lake console](https://console.aws.amazon.com/cloudtrailv2/home#/lake). Copy the event data store ARN from the Event data stores tab in the console. 
+2. [Optional] Create an AWS Cloud9 environment from the [AWS Cloud9 console](https://console.aws.amazon.com/cloud9/home) if you do not already have an environment for deploying CDK projects. 
+3. Check out this GitHub repository in your environment using `git clone`
+4. Update the *CloudtraillakeEventDataStoreArn* variable in the [config.ts](config.ts) file with the ARN of the event data store you copied in step 1. Save the file.
+5. Run `npm i @matthewbonig/state-machine` to install the 3rd party npm package.
+6. Run `npm run build` to compile the typecript
+7. Run `cdk bootstrap aws://{account-id}/{region}` with your AWS account ID and the region to which you will deploy this solution. You may need to run `npm install -g aws-cdk` if you get an error about the CDK version being outdated in your environment.
+8. Run `cdk synth` to generate the Cloudformation template.
+9. Run `cdk deploy` to deploy the stack
+
+After the solution is deployed, go to the [AWS Step Functions console](https://console.aws.amazon.com/states/home#/statemachines) to view the state machine and start an execution to see it in action. The sample state machine depends on having a service limit quota increase request pending or completed.
 
 ## When editing your state machine
 
-You can use this project as a base to get started building your own business logic. Edit `lib/cloudtraillake-orchestrator-stack.ts` with any resources you would like deployed as part of the solution. You can use Step Functions Workflow Studio to modify your state machine visually, and then copy the JSON definition and paste it into `step-functions/state-machine.json`. Then if you need any overrides added, those are defined in the overrides parameter of the state machine in `lib/cloudtraillake-orchestrator-stack.ts`
+You can use this project as a base to get started building your own business logic. 
+1. Edit [lib/cloudtraillake-orchestrator-stack.ts](lib/cloudtraillake-orchestrator-stack.ts) with any resources you would like deployed as part of the solution. Visit this [CDK Workshop](https://cdkworkshop.com/) to learn more.
+2. You can use Step Functions Workflow Studio to modify your state machine visually, and then copy the JSON definition and paste it into [step-functions/state-machine.json](step-functions/state-machine.json). 
+3. Then if you need any overrides added, those are defined in the *overrides* parameter of the state machine in [lib/cloudtraillake-orchestrator-stack.ts](lib/cloudtraillake-orchestrator-stack.ts)
+4. After making your desired changes, save the files, and run `cdk synth` and `cdk deploy`. Optionally, you can run `cdk watch` to hot-swap deploy whenever you save a file while you are developing.
 
 ## Useful commands
 
