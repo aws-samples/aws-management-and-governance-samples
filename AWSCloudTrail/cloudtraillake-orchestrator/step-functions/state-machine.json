@@ -1,0 +1,75 @@
+{
+  "Comment": "A sample state machine that queries CloudTrail Lake using the CloudtraillakeQuery Lambda function to demonstrate its capabilities.",
+  "StartAt": "CloudtraillakeQuery_RequestServiceQuotaIncrease",
+  "States": {
+    "CloudtraillakeQuery_RequestServiceQuotaIncrease": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "PLACEHOLDER",
+        "Payload": {
+          "EventDataStore": "PLACEHOLDER",
+          "QueryStatement": "SELECT json_extract_scalar(element_at(responseElements, 'requestedQuota'), '$.id') as requestId FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'RequestServiceQuotaIncrease'",
+          "QueryFormatParams": {
+            "EventDataStore": "PLACEHOLDER"
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Each_RequestServiceQuotaIncrease"
+    },
+    "Each_RequestServiceQuotaIncrease": {
+      "Type": "Map",
+      "End": true,
+      "Iterator": {
+        "StartAt": "CloudtraillakeQuery_UpdateServiceQuotaIncreaseRequestStatus",
+        "States": {
+          "CloudtraillakeQuery_UpdateServiceQuotaIncreaseRequestStatus": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "PLACEHOLDER",
+              "Payload": {
+                "EventDataStore": "PLACEHOLDER",
+                "QueryStatement": "SELECT serviceEventDetails FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'UpdateServiceQuotaIncreaseRequestStatus' and element_at(serviceEventDetails, 'requestId') = '{m[RequestId]}'",
+                "QueryFormatParams": {
+                  "EventDataStore": "PLACEHOLDER",
+                  "RequestId.$": "$[0].requestId"
+                }
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Send_Report"
+          },
+          "Send_Report": {
+            "Type": "Pass",
+            "End": true
+          }
+        }
+      },
+      "ItemsPath": "$.Payload.body"
+    }
+  }
+}
