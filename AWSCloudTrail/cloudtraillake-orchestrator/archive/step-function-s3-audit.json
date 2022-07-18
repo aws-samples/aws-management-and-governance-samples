@@ -1,0 +1,108 @@
+{ "overrides": {
+        "CloudtraillakeQuery_first": {
+          "Parameters": {
+            "FunctionName": handler.functionArn,
+            "Payload": {
+              "EventDataStore": eventDataStoreId,
+              "QueryFormatParams": {
+                "EventDataStore": eventDataStoreId,
+                "EventName": "CreateBucket"
+              }
+            }
+          }
+        },
+        "Each_CreateBucket": {
+          "Iterator": {
+            "States" : {
+              "CloudtraillakeQuery_second": {
+                "Parameters": {
+                  "FunctionName": handler.functionArn,
+                  "Payload": {
+                    "EventDataStore": eventDataStoreId,
+                    "QueryFormatParams": {
+                      "EventDataStore": eventDataStoreId
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+},
+{
+  "Comment": "A sample state machine that queries CloudTrail Lake using the CloudtraillakeQuery Lambda function to demonstrate its capabilities.",
+  "StartAt": "CloudtraillakeQuery_first",
+  "States": {
+    "CloudtraillakeQuery_first": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "PLACEHOLDER",
+        "Payload": {
+          "EventDataStore": "PLACEHOLDER",
+          "QueryStatement": "SELECT userIdentity.principalid, eventTime FROM {m[EventDataStore]} WHERE userIdentity.principalid IS NOT NULL AND eventName='{m[EventName]}'",
+          "QueryFormatParams": {
+            "EventDataStore": "PLACEHOLDER",
+            "EventName": "PLACEHOLDER"
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Each_CreateBucket"
+    },
+    "Each_CreateBucket": {
+      "Type": "Map",
+      "Iterator": {
+        "StartAt": "CloudtraillakeQuery_second",
+        "States": {
+          "CloudtraillakeQuery_second": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "PLACEHOLDER",
+              "Payload": {
+                "EventDataStore": "PLACEHOLDER",
+                "QueryStatement": "SELECT eventID, eventName, eventSource, eventTime FROM {m[EventDataStore]} WHERE eventTime > '{m[EventStartTime]}' AND eventSource = 's3.amazonaws.com' AND userIdentity.principalid = '{m[UserPrincipalId]}'",
+                "QueryFormatParams": {
+                  "EventDataStore": "PLACEHOLDER",
+                  "EventStartTime.$": "$[1].eventTime",
+                  "UserPrincipalId.$": "$[0].principalid"
+                }
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Send_Audit"
+          },
+          "Send_Audit": {
+            "Type": "Pass",
+            "End": true,
+            "Comment": "You might want to send the results from the CloudtraillakeQuery lambda function somewhere at this point."
+          }
+        }
+      },
+      "ItemsPath": "$.Payload.body",
+      "Next": "CloudtraillakeQuery_third"
+    }
+}
