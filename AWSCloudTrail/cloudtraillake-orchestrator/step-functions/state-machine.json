@@ -9,7 +9,7 @@
         "FunctionName": "PLACEHOLDER",
         "Payload": {
           "EventDataStore": "PLACEHOLDER",
-          "QueryStatement": "SELECT json_extract_scalar(element_at(responseElements, 'requestedQuota'), '$.id') as requestId FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'RequestServiceQuotaIncrease'",
+          "QueryStatement": "SELECT json_extract_scalar(element_at(responseElements, 'requestedQuota'), '$.id') as requestId, awsRegion, recipientAccountId FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'RequestServiceQuotaIncrease'",
           "QueryFormatParams": {
             "EventDataStore": "PLACEHOLDER"
           }
@@ -42,7 +42,7 @@
               "FunctionName": "PLACEHOLDER",
               "Payload": {
                 "EventDataStore": "PLACEHOLDER",
-                "QueryStatement": "SELECT serviceEventDetails FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'UpdateServiceQuotaIncreaseRequestStatus' and element_at(serviceEventDetails, 'requestId') = '{m[RequestId]}'",
+                "QueryStatement": "SELECT recipientAccountId, awsRegion, serviceEventDetails FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'UpdateServiceQuotaIncreaseRequestStatus' and element_at(serviceEventDetails, 'requestId') = '{m[RequestId]}'",
                 "QueryFormatParams": {
                   "EventDataStore": "PLACEHOLDER",
                   "RequestId.$": "$[0].requestId"
@@ -64,7 +64,14 @@
             "Next": "Send_Report"
           },
           "Send_Report": {
-            "Type": "Pass",
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "Message": {
+                "ServiceLimitIncreaseStatus.$": "$.Payload.body[0]"
+              },
+              "TopicArn": "PLACEHOLDER"
+            },
             "End": true
           }
         }
