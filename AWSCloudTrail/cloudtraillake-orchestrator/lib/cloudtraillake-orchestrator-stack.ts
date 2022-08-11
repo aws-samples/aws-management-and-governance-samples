@@ -2,6 +2,8 @@ import { Duration, Stack, StackProps, CfnResource, CfnParameter } from 'aws-cdk-
 import { Config } from '../config';
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import { Construct } from 'constructs';
 import { StateMachine } from '@matthewbonig/state-machine'
 import * as fs from "fs";
@@ -13,6 +15,7 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     // Required config (in ../config.ts)
     const eventDataStoreArn = Config.CloudtraillakeEventDataStoreArn;
     const eventDataStoreId = eventDataStoreArn.split('/')[1];
+    const emailAddress = Config.NotifyEmailAddress;
     
     // The Lambda function for querying the CloudTrail Lake, in Python
     const handler = new lambda.Function(this, "CloudtraillakeQueryHandler", {
@@ -32,6 +35,10 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     statement.addActions("cloudtrail:getQueryResults");
     statement.addResources(eventDataStoreArn);
     handler.addToRolePolicy(statement); 
+    
+    // Add an SNS topic for the Step Functions state machine to notify
+    const topic = new sns.Topic(this, 'ServiceLimitChecker');
+    topic.addSubscription(new subscriptions.EmailSubscription(emailAddress));
 
     // Create a role to for Step Functions state machine 
     const sfRole = new iam.Role(this, 'Role', {
@@ -40,6 +47,8 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     });
     // permission to invoke cloudtrail lake query function
     handler.grantInvoke(sfRole);
+    // permission to publish to the SNS topic
+    topic.grantPublish(sfRole);
 
     // step functions state machine
     new StateMachine(this, 'CloudtraillakeOrchestrator', {
@@ -71,6 +80,11 @@ export class CloudtraillakeOrchestratorStack extends Stack {
                       "EventDataStore": eventDataStoreId
                     }
                   }
+                }
+              },
+              "Send_Report": {
+                "Parameters": {
+                  "TopicArn": topic.topicArn
                 }
               }
             }
