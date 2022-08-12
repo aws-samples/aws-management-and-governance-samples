@@ -24,8 +24,6 @@ Resources:
     Properties:
       Description: Evidence report name
       Name: /AuditManagerEvidenceAutomation/report_name
-      Tags:
-        auto-delete: no
       Type: String
       Value: !Ref ReportName
   S3BucketParam:
@@ -33,8 +31,6 @@ Resources:
     Properties:
       Description: S3 bucket for evidence
       Name: /AuditManagerEvidenceAutomation/s3_bucket
-      Tags:
-        auto-delete: no
       Type: String
       Value: !Ref S3BucketName
   S3BucketRegionParam:
@@ -42,8 +38,6 @@ Resources:
     Properties:
       Description: Region for evidence S3 bucket
       Name: /AuditManagerEvidenceAutomation/bucket_region
-      Tags:
-        auto-delete: no
       Type: String
       Value: !Ref BucketRegion
   S3PrefixParam:
@@ -51,8 +45,6 @@ Resources:
     Properties:
       Description: S3 bucket prefix for evidence
       Name: /AuditManagerEvidenceAutomation/s3_prefix
-      Tags:
-        auto-delete: no
       Type: String
       Value: !Ref S3Prefix
   ConfigRuleFunction:
@@ -70,9 +62,6 @@ Resources:
           evidence_bucket: !Ref S3BucketParam
           bucket_region: !Ref S3BucketRegionParam
           s3_prefix: !Ref S3PrefixParam
-      Tags:
-        - Key: "auto-delete"
-          Value: "no"
       Code:
         ZipFile: |
           '''
