@@ -9,10 +9,7 @@
         "FunctionName": "PLACEHOLDER",
         "Payload": {
           "EventDataStore": "PLACEHOLDER",
-          "QueryStatement": "SELECT json_extract_scalar(element_at(responseElements, 'requestedQuota'), '$.id') as requestId, awsRegion, recipientAccountId FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'RequestServiceQuotaIncrease'",
-          "QueryFormatParams": {
-            "EventDataStore": "PLACEHOLDER"
-          }
+          "QueryStatement": "SELECT json_extract_scalar(element_at(responseElements, 'requestedQuota'), '$.id') as requestId, awsRegion, recipientAccountId FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'RequestServiceQuotaIncrease'"
         }
       },
       "Retry": [
@@ -44,7 +41,6 @@
                 "EventDataStore": "PLACEHOLDER",
                 "QueryStatement": "SELECT recipientAccountId, awsRegion, serviceEventDetails FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'UpdateServiceQuotaIncreaseRequestStatus' and element_at(serviceEventDetails, 'requestId') = '{m[RequestId]}'",
                 "QueryFormatParams": {
-                  "EventDataStore": "PLACEHOLDER",
                   "RequestId.$": "$[0].requestId"
                 }
               }
