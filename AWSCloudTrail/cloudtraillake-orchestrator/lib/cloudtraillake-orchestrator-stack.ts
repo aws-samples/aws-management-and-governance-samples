@@ -1,4 +1,4 @@
-import { Duration, Stack, StackProps, CfnResource, CfnParameter, Token } from 'aws-cdk-lib';
+import { Duration, Stack, StackProps, CfnResource, CfnParameter } from 'aws-cdk-lib';
 import { Config } from '../config';
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -31,7 +31,6 @@ export class CloudtraillakeOrchestratorStack extends Stack {
       emailAddress = Config.NotifyEmailAddress;
     }
     else {
-      console.log("NotifyEmailAddress not defined in config.ts. Must be passed in as a paramter.")
       emailAddress = new CfnParameter(this, "NotifyEmailAddress", {
         type: "String",
         allowedPattern: '.+\@.+',
@@ -40,13 +39,14 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     }
     
     // The Lambda function for querying the CloudTrail Lake, in Python
+    const lambda_inline = fs.readFileSync('lambda/cloudtraillake-query.py','utf8');
     const handler = new lambda.Function(this, "CloudtraillakeQueryHandler", {
       runtime: lambda.Runtime.PYTHON_3_9,
-      code: lambda.Code.fromAsset("lambda"),
-      handler: "cloudtraillake-query.lambda_handler",
+      code: lambda.Code.fromInline(lambda_inline),
+      handler: "index.lambda_handler",
       timeout: Duration.minutes(5),
       environment: {
-        EVENT_DATA_STORE: eventDataStoreArn.split('/')[1]
+        EVENT_DATA_STORE: eventDataStoreArn
       }
     });
     // give it an ID that is easier to find

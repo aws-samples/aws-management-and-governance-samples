@@ -26,6 +26,11 @@ def lambda_handler(event, context):
     if EventDataStore == '' or EventDataStore == "FROM_ENV":
         EventDataStore = os.environ['EVENT_DATA_STORE']
     
+    # If a full Arn was passed, we only need the event data store ID
+    matchEDS = re.search("^arn:.*eventdatastore\/(.*)", EventDataStore)
+    if matchEDS:
+        EventDataStore = matchEDS.group(1)
+    
     # insert the EventDataStore into the QueryFormatParams if used m{EventDataStore} in place of hard coding it into the QueryStatement
     # if eventDataStore is derived from the environment, then it will be formatted in to the SQL
     if not 'QueryFormatParams' in event:

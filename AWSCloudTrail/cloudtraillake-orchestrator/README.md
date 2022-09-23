@@ -26,12 +26,6 @@ This solution requires installing a 3rd party package that is not owned or maint
 
 After the solution is deployed, go to the [AWS Step Functions console](https://console.aws.amazon.com/states/home#/statemachines) to view the state machine and start an execution to see it in action. The sample state machine depends on having a service limit quota increase request pending or completed.
 
-## Cloudformation deployment
-
-Preliminary support for 1-click cloudformation deployment is complete. If you set both variables in config.py to an empty string it will read from CFN parameters instead. Grab the output from `cdk synth` to create a one-click deployment to Cloudformation. Running `cdk deploy CloudtraillakeEventDataStoreArn='full_arn_of_your_event_store' --parameters NotifyEmailAddress='your_email'` is functionality equivalent to `cdk deploy`.
-
-* Note: When deploying via Cloudformation parameters, the `EVENT_DATA_STORE` environment variable needs to be manually set in the Lambda function configuration. (Just the event data store ID, not the whole ARN.) ((Suggestions welcome on how to fix this within the CDK.))
-
 ## When editing your state machine
 
 You can use this project as a base to get started building your own business logic. 
@@ -39,6 +33,14 @@ You can use this project as a base to get started building your own business log
 2. You can use Step Functions Workflow Studio to modify your state machine visually, and then copy the JSON definition and paste it into [step-functions/state-machine.json](step-functions/state-machine.json). 
 3. Then if you need any overrides added, those are defined in the *overrides* parameter of the state machine in [lib/cloudtraillake-orchestrator-stack.ts](lib/cloudtraillake-orchestrator-stack.ts)
 4. After making your desired changes, save the files, and run `cdk synth` and `cdk deploy`. Optionally, you can run `cdk watch` to hot-swap deploy whenever you save a file while you are developing.
+
+## Cloudformation deployment
+
+If you set both variables in config.py to an empty string it will read from CFN parameters instead. 
+Grab the output from `cdk synth` to create a one-click deployment to Cloudformation. 
+Running `cdk deploy CloudtraillakeEventDataStoreArn='full_arn_of_your_event_store' --parameters NotifyEmailAddress='your_email'` is functionality equivalent to `cdk deploy`.
+
+* Note: Deploying via Cloudformation limits your ability to incorporate your Step Functions state machine changes back into the CDK project. If you intend to adapt this solution to meet your business objectives, stick with `cdk deploy`
 
 ## Useful commands
 
