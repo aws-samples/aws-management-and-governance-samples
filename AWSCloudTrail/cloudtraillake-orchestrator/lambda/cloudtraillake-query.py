@@ -3,6 +3,7 @@ import boto3
 import time
 import re
 import datetime
+import os
 client = boto3.client('cloudtrail')
 RequiredParameters = ['EventDataStore', 'QueryStatement']
 MaxQueryResults = 100
@@ -21,9 +22,21 @@ def lambda_handler(event, context):
     EventDataStore = event['EventDataStore']
     QueryStatement = event['QueryStatement']
     
-    # insert the EventDataStore into the QueryStatement if  used {EventDataStore} in place of hard coding it into the QueryStatement
-    # Note: need to do more error handling for this to work. Use QueryFormatParams in the mean time
-    #QueryStatement = QueryStatement.format(EventDataStore = event['EventDataStore'])
+    # obtain the event data store associated with this Lambda function if not provided
+    if EventDataStore == '' or EventDataStore == "FROM_ENV":
+        EventDataStore = os.environ['EVENT_DATA_STORE']
+    
+    # If a full Arn was passed, we only need the event data store ID
+    matchEDS = re.search("^arn:.*eventdatastore\/(.*)", EventDataStore)
+    if matchEDS:
+        EventDataStore = matchEDS.group(1)
+    
+    # insert the EventDataStore into the QueryFormatParams if used m{EventDataStore} in place of hard coding it into the QueryStatement
+    # if eventDataStore is derived from the environment, then it will be formatted in to the SQL
+    if not 'QueryFormatParams' in event:
+        event['QueryFormatParams'] = {}
+    if not 'EventDataStore' in event['QueryFormatParams']:
+        event['QueryFormatParams']['EventDataStore'] = EventDataStore
     
     # further manipulate the QueryStatement if the caller passed in parameters to format into the query 
     # note the format is {m[VariableName]}

@@ -34,6 +34,14 @@ You can use this project as a base to get started building your own business log
 3. Then if you need any overrides added, those are defined in the *overrides* parameter of the state machine in [lib/cloudtraillake-orchestrator-stack.ts](lib/cloudtraillake-orchestrator-stack.ts)
 4. After making your desired changes, save the files, and run `cdk synth` and `cdk deploy`. Optionally, you can run `cdk watch` to hot-swap deploy whenever you save a file while you are developing.
 
+## Cloudformation deployment
+
+If you set both variables in config.py to an empty string it will read from CFN parameters instead. 
+Grab the output from `cdk synth` to create a one-click deployment to Cloudformation. 
+Running `cdk deploy CloudtraillakeEventDataStoreArn='full_arn_of_your_event_store' --parameters NotifyEmailAddress='your_email'` is functionality equivalent to `cdk deploy`.
+
+* Note: Deploying via Cloudformation limits your ability to incorporate your Step Functions state machine changes back into the CDK project. If you intend to adapt this solution to meet your business objectives, stick with `cdk deploy`
+
 ## Useful commands
 
 * `npm run build`   compile typescript to js

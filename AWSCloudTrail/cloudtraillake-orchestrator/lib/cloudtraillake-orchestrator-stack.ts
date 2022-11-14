@@ -12,18 +12,41 @@ export class CloudtraillakeOrchestratorStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    // Required config (in ../config.ts)
-    const eventDataStoreArn = Config.CloudtraillakeEventDataStoreArn;
-    const eventDataStoreId = eventDataStoreArn.split('/')[1];
-    const emailAddress = Config.NotifyEmailAddress;
+    // Get the eventDataStore and email address from the config or from paramaters
+    var eventDataStoreArn;
+    if ( Config.CloudtraillakeEventDataStoreArn ) {
+      eventDataStoreArn = Config.CloudtraillakeEventDataStoreArn
+    }
+    else {
+      //console.log("CloudtraillakeEventDataStoreArn not defined in config.ts. Must be passed in as a parameter.")
+      eventDataStoreArn = new CfnParameter(this, "CloudtraillakeEventDataStoreArn", {
+        type: "String",
+        allowedPattern: '^arn:aws:cloudtrail:.*',
+        description: "The ARN of the CloudTrail Lake Event Data Store. Permission will be given to the Lambda function to query this event data store."
+        }).valueAsString;
+    }
+
+    var emailAddress;
+    if ( Config.NotifyEmailAddress ) {
+      emailAddress = Config.NotifyEmailAddress;
+    }
+    else {
+      emailAddress = new CfnParameter(this, "NotifyEmailAddress", {
+        type: "String",
+        allowedPattern: '.+\@.+',
+        description: "The email address which will recieve notifications from SNS for any service limit quota limits that are requested. Note: you will need to check your inbox after deploying the CDK and confirm the SNS subscription"
+        }).valueAsString;
+    }
     
     // The Lambda function for querying the CloudTrail Lake, in Python
+    const lambda_inline = fs.readFileSync('lambda/cloudtraillake-query.py','utf8');
     const handler = new lambda.Function(this, "CloudtraillakeQueryHandler", {
       runtime: lambda.Runtime.PYTHON_3_9,
-      code: lambda.Code.fromAsset("lambda"),
-      handler: "cloudtraillake-query.lambda_handler",
+      code: lambda.Code.fromInline(lambda_inline),
+      handler: "index.lambda_handler",
       timeout: Duration.minutes(5),
       environment: {
+        EVENT_DATA_STORE: eventDataStoreArn
       }
     });
     // give it an ID that is easier to find
@@ -52,7 +75,6 @@ export class CloudtraillakeOrchestratorStack extends Stack {
 
     // step functions state machine
     new StateMachine(this, 'CloudtraillakeOrchestrator', {
-      stateMachineName: 'CloudtraillakeOrchestrator',
       role: sfRole,
       definition: JSON.parse(fs.readFileSync('step-functions/state-machine.json').toString()),
       // this is where to provide dynamic/variable overrides to the state machine definition
@@ -61,10 +83,7 @@ export class CloudtraillakeOrchestratorStack extends Stack {
           "Parameters": {
             "FunctionName": handler.functionArn,
             "Payload": {
-              "EventDataStore": eventDataStoreId,
-              "QueryFormatParams": {
-                "EventDataStore": eventDataStoreId,
-              }
+              "EventDataStore": "FROM_ENV"
             }
           }
         },
@@ -75,10 +94,7 @@ export class CloudtraillakeOrchestratorStack extends Stack {
                 "Parameters": {
                   "FunctionName": handler.functionArn,
                   "Payload": {
-                    "EventDataStore": eventDataStoreId,
-                    "QueryFormatParams": {
-                      "EventDataStore": eventDataStoreId
-                    }
+                    "EventDataStore": "FROM_ENV"
                   }
                 }
               },

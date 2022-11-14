@@ -1,0 +1,135 @@
+Parameters:
+  CloudtraillakeEventDataStoreArn:
+    Type: String
+    AllowedPattern: ^arn:aws:cloudtrail:.*
+    Description: The ARN of the CloudTrail Lake Event Data Store. Permission will be given to the Lambda function to query this event data store.
+  NotifyEmailAddress:
+    Type: String
+    AllowedPattern: .+@.+
+    Description: "The email address which will recieve notifications from SNS for any service limit quota limits that are requested. Note: you will need to check your inbox after deploying the CDK and confirm the SNS subscription"
+Resources:
+  CloudtraillakeQueryHandlerServiceRole5D9D9813:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - :iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  CloudtraillakeQueryHandlerServiceRoleDefaultPolicy3FB4268D:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - cloudtrail:getQueryResults
+              - cloudtrail:startQuery
+            Effect: Allow
+            Resource:
+              Ref: CloudtraillakeEventDataStoreArn
+        Version: "2012-10-17"
+      PolicyName: CloudtraillakeQueryHandlerServiceRoleDefaultPolicy3FB4268D
+      Roles:
+        - Ref: CloudtraillakeQueryHandlerServiceRole5D9D9813
+  CloudtraillakeQuery:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: "import json\nimport boto3\nimport time\nimport re\nimport datetime\nimport os\nclient = boto3.client('cloudtrail')\nRequiredParameters = ['EventDataStore', 'QueryStatement']\nMaxQueryResults = 100\n\ndef lambda_handler(event, context):\n    \n    # check the input parameters from the function invocation\n    for requiredParam in RequiredParameters:\n        if requiredParam not in event:\n            return {\n                'statusCode': 400,\n                'body': json.dumps({\n                    \"MissingParameter\": requiredParam\n                })\n            }\n    EventDataStore = event['EventDataStore']\n    QueryStatement = event['QueryStatement']\n    \n    # obtain the event data store associated with this Lambda function if not provided\n    if EventDataStore == '' or EventDataStore == \"FROM_ENV\":\n        EventDataStore = os.environ['EVENT_DATA_STORE']\n    \n    # If a full Arn was passed, we only need the event data store ID\n    matchEDS = re.search(\"^arn:.*eventdatastore\\/(.*)\", EventDataStore)\n    if matchEDS:\n        EventDataStore = matchEDS.group(1)\n    \n    # insert the EventDataStore into the QueryFormatParams if used m{EventDataStore} in place of hard coding it into the QueryStatement\n    # if eventDataStore is derived from the environment, then it will be formatted in to the SQL\n    if not 'QueryFormatParams' in event:\n        event['QueryFormatParams'] = {}\n    if not 'EventDataStore' in event['QueryFormatParams']:\n        event['QueryFormatParams']['EventDataStore'] = EventDataStore\n    \n    # further manipulate the QueryStatement if the caller passed in parameters to format into the query \n    # note the format is {m[VariableName]}\n    # for example:\n    # \"QueryStatement\": \"SELECT eventID, eventName, eventSource, eventTime FROM {m[EventDataStore]} WHERE ...\n    # \"QueryFormatParams\" : {\n    #  \"EventDataStore\": \"996f9246-56ad-49eb-bdd2-7276a6d17884\",\n    #  \"invalidParams\": \"will not be inserted\"\n    #}\n    if 'QueryFormatParams' in event:\n        QueryStatement = QueryStatement.format(m=event['QueryFormatParams'])\n    \n    # start the query\n    response = client.start_query(\n        QueryStatement=QueryStatement\n    )\n    QueryId = response['QueryId']\n    \n    # begin getting query results\n    QueryResultRows = []\n    NextToken = None\n    \n    while 1:\n\n        # get the batch of query results\n        args = {}\n        args['EventDataStore'] = EventDataStore\n        args['QueryId'] = QueryId\n        args['MaxQueryResults'] = MaxQueryResults\n        if NextToken is not None:\n            args['NextToken'] = NextToken\n        response = client.get_query_results(**args)\n        \n        # handle if query is not yet finished\n        if response['QueryStatus'] != 'FINISHED':\n            time.sleep(1)\n            continue\n        \n        # save the results and continue getting results if any\n        if 'QueryResultRows' in response:\n            QueryResultRows.extend(response['QueryResultRows'])\n        if 'NextToken' in response:\n            NextToken=response['NextToken']\n        else:\n            break\n\n    print(\"CloudTrail Lake Query:\", { \"TotalResults\": len(QueryResultRows), \"QueryStatement\": QueryStatement, \"EventDataStore\": EventDataStore } )\n\n    return {\n        'statusCode': 200,\n        'body': QueryResultRows\n    }\n\n"
+      Role:
+        Fn::GetAtt:
+          - CloudtraillakeQueryHandlerServiceRole5D9D9813
+          - Arn
+      Environment:
+        Variables:
+          EVENT_DATA_STORE:
+            Ref: CloudtraillakeEventDataStoreArn
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Timeout: 300
+    DependsOn:
+      - CloudtraillakeQueryHandlerServiceRoleDefaultPolicy3FB4268D
+      - CloudtraillakeQueryHandlerServiceRole5D9D9813
+  ServiceLimitChecker3F9FF6D3:
+    Type: AWS::SNS::Topic
+  ServiceLimitCheckerTokenSubscription1819F69A8:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn:
+        Ref: ServiceLimitChecker3F9FF6D3
+      Endpoint:
+        Ref: NotifyEmailAddress
+  Role1ABCC5F0:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                Fn::Join:
+                  - ""
+                  - - states.
+                    - Ref: AWS::Region
+                    - .amazonaws.com
+        Version: "2012-10-17"
+      Description: Role for CloudtraillakeOrchectrator state machine to interface with other AWS resources
+  RoleDefaultPolicy5FFB7DAB:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: lambda:InvokeFunction
+            Effect: Allow
+            Resource:
+              - Fn::GetAtt:
+                  - CloudtraillakeQuery
+                  - Arn
+              - Fn::Join:
+                  - ""
+                  - - Fn::GetAtt:
+                        - CloudtraillakeQuery
+                        - Arn
+                    - :*
+          - Action: sns:Publish
+            Effect: Allow
+            Resource:
+              Ref: ServiceLimitChecker3F9FF6D3
+        Version: "2012-10-17"
+      PolicyName: RoleDefaultPolicy5FFB7DAB
+      Roles:
+        - Ref: Role1ABCC5F0
+  CloudtraillakeOrchestrator0B66B823:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn:
+        Fn::GetAtt:
+          - Role1ABCC5F0
+          - Arn
+      DefinitionString:
+        Fn::Join:
+          - ""
+          - - '{"Comment":"A sample state machine that queries CloudTrail Lake using the CloudtraillakeQuery Lambda function to demonstrate its capabilities.","StartAt":"CloudtraillakeQuery_RequestServiceQuotaIncrease","States":{"CloudtraillakeQuery_RequestServiceQuotaIncrease":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"'
+            - Fn::GetAtt:
+                - CloudtraillakeQuery
+                - Arn
+            - "\",\"Payload\":{\"EventDataStore\":\"FROM_ENV\",\"QueryStatement\":\"SELECT json_extract_scalar(element_at(responseElements, 'requestedQuota'), '$.id') as requestId, awsRegion, recipientAccountId FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'RequestServiceQuotaIncrease'\"}},\"Retry\":[{\"ErrorEquals\":[\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Next\":\"Each_RequestServiceQuotaIncrease\"},\"Each_RequestServiceQuotaIncrease\":{\"Type\":\"Map\",\"End\":true,\"Iterator\":{\"StartAt\":\"CloudtraillakeQuery_UpdateServiceQuotaIncreaseRequestStatus\",\"States\":{\"CloudtraillakeQuery_UpdateServiceQuotaIncreaseRequestStatus\":{\"Type\":\"Task\",\"Resource\":\"arn:aws:states:::lambda:invoke\",\"Parameters\":{\"FunctionName\":\""
+            - Fn::GetAtt:
+                - CloudtraillakeQuery
+                - Arn
+            - "\",\"Payload\":{\"EventDataStore\":\"FROM_ENV\",\"QueryStatement\":\"SELECT recipientAccountId, awsRegion, serviceEventDetails FROM {m[EventDataStore]} WHERE eventSource='servicequotas.amazonaws.com' and eventname = 'UpdateServiceQuotaIncreaseRequestStatus' and element_at(serviceEventDetails, 'requestId') = '{m[RequestId]}'\",\"QueryFormatParams\":{\"RequestId.$\":\"$[0].requestId\"}}},\"Retry\":[{\"ErrorEquals\":[\"Lambda.ServiceException\",\"Lambda.AWSLambdaException\",\"Lambda.SdkClientException\"],\"IntervalSeconds\":2,\"MaxAttempts\":6,\"BackoffRate\":2}],\"Next\":\"Send_Report\"},\"Send_Report\":{\"Type\":\"Task\",\"Resource\":\"arn:aws:states:::sns:publish\",\"Parameters\":{\"Message\":{\"ServiceLimitIncreaseStatus.$\":\"$.Payload.body[0]\"},\"TopicArn\":\""
+            - Ref: ServiceLimitChecker3F9FF6D3
+            - '"},"End":true}}},"ItemsPath":"$.Payload.body"}}}'
+    DependsOn:
+      - RoleDefaultPolicy5FFB7DAB
+      - Role1ABCC5F0
