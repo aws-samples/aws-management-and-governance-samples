@@ -6,7 +6,7 @@ This repository contains sample code for AWS Service Catalog.  AWS Service Catal
 
 The following links will provide additional resources to learn about AWS Service Catalog.
 
--   [AWS Service Catalog Page](https://aws.amazon.com/servicecatalog/)
+-   [AWS Service Catalog](https://aws.amazon.com/servicecatalog/)
 -   [AWS Service Catalog Workshop](http://servicecatalog.workshop.aws)
 
 ## Security
