@@ -13,7 +13,7 @@ $ cdk init app --language=python
 $ pip install -r requirements.txt
 ```
 
-Then clone the cdk_sc_sample repo into your cdk_sc_sample directory.  
+Copy this cdk_sc_sample repo into your cdk_sc_sample directory.  
 
 After this, you can run the following: 
 
