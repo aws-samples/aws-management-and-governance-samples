@@ -2,6 +2,7 @@ import { Duration, Stack, StackProps, CfnResource, CfnParameter } from 'aws-cdk-
 import { Config } from '../config';
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import { Construct } from 'constructs';
@@ -59,8 +60,13 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     statement.addResources(eventDataStoreArn);
     handler.addToRolePolicy(statement); 
     
+    // Create a KMS key for encrypting the SNS topic
+    const key = new kms.Key(this, "ServiceLimitCheckerKey");
+    
     // Add an SNS topic for the Step Functions state machine to notify
-    const topic = new sns.Topic(this, 'ServiceLimitChecker');
+    const topic = new sns.Topic(this, 'ServiceLimitChecker', {
+      masterKey: key
+    });
     topic.addSubscription(new subscriptions.EmailSubscription(emailAddress));
 
     // Create a role to for Step Functions state machine 
@@ -72,6 +78,8 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     handler.grantInvoke(sfRole);
     // permission to publish to the SNS topic
     topic.grantPublish(sfRole);
+    // permission to encrypt via KMS to the SNS topic
+    key.grantEncryptDecrypt(sfRole)
 
     // step functions state machine
     new StateMachine(this, 'CloudtraillakeOrchestrator', {
