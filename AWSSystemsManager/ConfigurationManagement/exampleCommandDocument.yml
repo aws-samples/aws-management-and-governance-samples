@@ -1,0 +1,58 @@
+---
+schemaVersion: '2.2'
+description: Run first a PowerShell script & then the inventory plugin.
+mainSteps:
+- action: aws:runPowerShellScript
+  name: runPowerShellScript
+  inputs:
+    runCommand: "{{ commands }}"
+- action: aws:softwareInventory
+  name: collectSoftwareInventoryItems
+  inputs:
+    applications: "{{ applications }}"
+    awsComponents: "{{ awsComponents }}"
+    networkConfig: "{{ networkConfig }}"
+    windowsUpdates: "{{ windowsUpdates }}"
+    customInventory: "{{ customInventory }}"
+parameters:
+  commands:
+    type: StringList
+    description: "(Required) Specify a shell script or a command to run."
+    minItems: 1
+    displayType: textarea
+  applications:
+    type: String
+    default: Enabled
+    description: "(Optional) Collect data for installed applications."
+    allowedValues:
+    - Enabled
+    - Disabled
+  awsComponents:
+    type: String
+    default: Enabled
+    description: "(Optional) Collect data for AWSComponents like amazon-ssm-agent."
+    allowedValues:
+    - Enabled
+    - Disabled
+  networkConfig:
+    type: String
+    default: Enabled
+    description: "(Optional) Collect data for Network configurations."
+    allowedValues:
+    - Enabled
+    - Disabled
+  windowsUpdates:
+    type: String
+    default: Enabled
+    description: "(Optional) Collect data for all WindowsUpdates."
+    allowedValues:
+    - Enabled
+    - Disabled
+  customInventory:
+    type: String
+    default: Enabled
+    description: "(Optional) Collect data for custom inventory."
+    allowedValues:
+    - Enabled
+    - Disabled
+
