@@ -1,4 +1,4 @@
-import { Duration, Stack, StackProps, CfnResource, CfnParameter } from 'aws-cdk-lib';
+import { Duration, Stack, StackProps, CfnResource, CfnParameter, RemovalPolicy } from 'aws-cdk-lib';
 import { Config } from '../config';
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -62,6 +62,7 @@ export class CloudtraillakeOrchestratorStack extends Stack {
     
     // Create a KMS key for encrypting the SNS topic
     const key = new kms.Key(this, "ServiceLimitCheckerKey");
+    key.applyRemovalPolicy(RemovalPolicy.DESTROY);
     
     // Add an SNS topic for the Step Functions state machine to notify
     const topic = new sns.Topic(this, 'ServiceLimitChecker', {
