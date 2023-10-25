@@ -87,7 +87,7 @@
                 "Timeout": {
                     "Ref": "Timeout"
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Description": "Create a new AWS lambda function for rule code"
             },
             "DependsOn": "LambdaRole"

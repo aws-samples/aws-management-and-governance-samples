@@ -58,7 +58,7 @@ Resources:
   LicenseTrackingLambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python3.7
+      Runtime: python3.10
       Role: !GetAtt LambdaRole.Arn
       Handler: index.handler
       Timeout: 120
