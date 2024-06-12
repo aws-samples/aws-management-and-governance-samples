@@ -10,7 +10,7 @@ Parameters:
     AllowedValues:
       - true
       - false
-    ConstraintDescription: Must specify weather to create the service linked role or not.
+    ConstraintDescription: Must specify whether to create the service linked role or not.
   CPBucketName:
     Type: String
     Description: >-
