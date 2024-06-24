@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@matthewbonig/state-machine": "^0.0.16",
-    "aws-cdk-lib": "^2.28.1",
+    "aws-cdk-lib": "^2.80.0",
     "constructs": "^10.0.0"
   }
 }
