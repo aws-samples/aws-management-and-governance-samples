@@ -1,0 +1,93 @@
+$ aws ssm describe-patch-baselines |jq '.BaselineIdentities | map({ (.OperatingSystem): (.value = .BaselineId | .label = .BaselineName | .description = .BaselineDescription | .disabled=false | del(.BaselineId, .BaselineName, .OperatingSystem, .BaselineDescription, .DefaultBaseline)) }) | add'
+{
+  "AMAZON_LINUX_2022": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-0028ca011460d5eaf",
+    "label": "AWS-AmazonLinux2022DefaultPatchBaseline",
+    "description": "Default Patch Baseline for Amazon Linux 2022 Provided by AWS.",
+    "disabled": false
+  },
+  "CENTOS": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-03e3f588eec25344c",
+    "label": "AWS-CentOSDefaultPatchBaseline",
+    "description": "Default Patch Baseline for CentOS Provided by AWS.",
+    "disabled": false
+  },
+  "ROCKY_LINUX": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-03ec98bc512aa3ac0",
+    "label": "AWS-RockyLinuxDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Rocky Linux Provided by AWS.",
+    "disabled": false
+  },
+  "AMAZON_LINUX_2023": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-05c9c9bf778d4c4d0",
+    "label": "AWS-AmazonLinux2023DefaultPatchBaseline",
+    "description": "Default Patch Baseline for Amazon Linux 2023 Provided by AWS.",
+    "disabled": false
+  },
+  "ORACLE_LINUX": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-06bff38e95fe85c02",
+    "label": "AWS-OracleLinuxDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Oracle Linux Server Provided by AWS.",
+    "disabled": false
+  },
+  "SUSE": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-07d8884178197b66b",
+    "label": "AWS-SuseDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Suse Provided by AWS.",
+    "disabled": false
+  },
+  "WINDOWS": {
+    "value": "pb-016889927b2bb8542",
+    "label": "custom-WindowsServer-Blog-Baseline",
+    "description": null,
+    "disabled": false
+  },
+  "DEBIAN": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-09a5f8eb62bde80b1",
+    "label": "AWS-DebianDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Debian Provided by AWS.",
+    "disabled": false
+  },
+  "AMAZON_LINUX_2": {
+    "value": "pb-01134e599504910b5",
+    "label": "custom-AmazonLinux2-Blog-Baseline",
+    "description": null,
+    "disabled": false
+  },
+  "AMAZON_LINUX": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-0c10e657807c7a700",
+    "label": "AWS-AmazonLinuxDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Amazon Linux Provided by AWS.",
+    "disabled": false
+  },
+  "UBUNTU": {
+    "value": "pb-06e3563bd35503f2b",
+    "label": "custom-UbuntuServer-Blog-Baseline",
+    "description": null,
+    "disabled": false
+  },
+  "ALMA_LINUX": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-0cb0c4966f86b059b",
+    "label": "AWS-AlmaLinuxDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Alma Linux Provided by AWS.",
+    "disabled": false
+  },
+  "REDHAT_ENTERPRISE_LINUX": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-0cbb3a633de00f07c",
+    "label": "AWS-RedHatDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Redhat Enterprise Linux Provided by AWS.",
+    "disabled": false
+  },
+  "RASPBIAN": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-0ec16280999c5c75e",
+    "label": "AWS-RaspbianDefaultPatchBaseline",
+    "description": "Default Patch Baseline for Raspbian Provided by AWS.",
+    "disabled": false
+  },
+  "MACOS": {
+    "value": "arn:aws:ssm:us-east-1:075727635805:patchbaseline/pb-0ee4f94581368c0d4",
+    "label": "AWS-MacOSDefaultPatchBaseline",
+    "description": "Default Patch Baseline for MacOS Provided by AWS.",
+    "disabled": false
+  }
+}

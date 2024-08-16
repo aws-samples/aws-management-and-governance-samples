@@ -1,0 +1,15 @@
+{
+  "Name": "qs-host-management",
+  "Description": "Enable Host Management for the AWS Organization",
+  "ConfigurationDefinitions": [{
+      "Type": "AWSQuickSetupType-SSMHostMgmt",
+      "Parameters": {
+          "CollectInventory": "true",
+          "ScanInstances": "false",
+          "UpdateSsmAgent": "false",
+          "TargetType": "*",
+          "TargetOrganizationalUnits": "ou-ab12-cdefgh34",
+          "TargetRegions": "us-east-1,us-east-2"
+      }
+  }]
+}
