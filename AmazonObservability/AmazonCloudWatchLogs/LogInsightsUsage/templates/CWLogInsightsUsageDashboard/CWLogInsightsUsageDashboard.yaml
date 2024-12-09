@@ -1,0 +1,158 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template will create all required resources to deploy a CloudWatchj dashboard custom widget. The widget will execute lambda code in the current account that will display a list of all the queries executed in the last few days and order them by the amount of bytes scanned. This is helpful when you need to understand which queries are scanning a lot of data and might be candidates for optmization.
+
+Parameters:
+  DoCreateExampleDashboard:
+    Description: Create the Dashboard to show the widget. Select No to deploy the Lambda function only. 
+    Type: String
+    AllowedValues: [ 'Yes', 'No']
+    Default: 'Yes'
+
+Conditions:
+  CreateExampleDashboard: !Equals ["Yes", !Ref DoCreateExampleDashboard]
+
+Resources:
+  lambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+
+          import boto3
+          from botocore.exceptions import ClientError
+
+          def get_current_region():
+              #this function will obtain the current region the code is running on so it can be use to create the boto connection properly.
+              try:
+                  """Get the current AWS region."""
+                  client = boto3.client('s3') # example client, could be any
+                  region = client.meta.region_name
+            
+                  return region
+              except ClientError:
+                  # If we can't get the region, return None
+                  return None
+
+          def lambda_handler(event, context):
+              current_region = get_current_region()
+              if current_region is None:
+                  return "<p>No region specified. Please configure your AWS region.</p>"
+              
+              logs_client = boto3.client('logs', region_name=current_region)
+
+              try:
+                  response = logs_client.describe_queries()
+                  queries = response.get('queries', [])
+
+                  if not queries:
+                      return "<p>No queries found.</p>"
+
+                  # Collect all data in a list of dictionaries
+                  query_data = []
+                  for query in queries:
+                      query_id = query['queryId']
+                      query_string = query['queryString']
+
+                      results = logs_client.get_query_results(queryId=query_id)
+                      statistics = results.get('statistics', {})
+                      records_matched = statistics.get('recordsMatched', 'N/A')
+                      records_scanned = statistics.get('recordsScanned', 'N/A')
+                      bytes_scanned = statistics.get('bytesScanned', 'N/A')
+                      # Extract statistics
+
+                      # Convert bytesScanned to a number for sorting
+                      bytes_scanned_num = float(bytes_scanned) if bytes_scanned != 'N/A' else float('-inf')
+
+                      query_data.append({
+                          'query_id': query_id,
+                          'query_string': query_string,
+                          'records_matched': records_matched,
+                          'records_scanned': records_scanned,
+                          'bytes_scanned': bytes_scanned,
+                          'bytes_scanned_num': bytes_scanned_num
+                      })
+
+                  # Sort the data by bytesScanned
+                  sorted_data = sorted(query_data, key=lambda x: x['bytes_scanned_num'], reverse=True)
+
+                  # Generate the HTML table
+                  html_table = "<table border='1'><tr><th>Query ID</th><th>Query String</th><th>Records Matched</th><th>Records Scanned</th><th>Bytes Scanned</th></tr>"
+
+                  for item in sorted_data:
+                      html_table += f"<tr><td>{item['query_id']}</td><td>{item['query_string']}</td><td>{item['records_matched']}</td><td>{item['records_scanned']}</td><td>{item['bytes_scanned']}</td></tr>"
+
+                  html_table += "</table>"
+                  return html_table
+
+              except ClientError as e:
+                  return f"<p>An error occurred: {e}</p>"
+      Description: "CloudWatch Custom Widget for Log Insights query history"
+      FunctionName: !Sub ${AWS::StackName}
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt lambdaIAMRole.Arn
+      Runtime: python3.11
+      Timeout: 60
+      Tags:
+        - Key: cw-custom-widget
+          Value: describe:readOnly
+
+  lambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}:*
+              - Action:
+                  - 'logs:Describe*'
+                  - logs:GetQueryResults
+                Resource:
+                  - '*'
+                Effect: Allow
+          PolicyName: lambda
+
+
+  lambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}
+      RetentionInDays: 7
+
+  demoDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: CreateExampleDashboard
+    Properties:
+      DashboardName: !Sub ${AWS::StackName}-${AWS::Region}
+      DashboardBody:
+        !Sub
+          >
+          {
+              "widgets": [
+                  {
+                      "type": "custom",
+                      "width": 8,
+                      "height": 8,
+                      "properties": {
+                          "endpoint": "${lambdaFunction.Arn}"
+                      }
+                  }
+              ]
+          }
