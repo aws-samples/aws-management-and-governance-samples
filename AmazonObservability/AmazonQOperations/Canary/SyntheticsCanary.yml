@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for CloudWatch Synthetics Canary with increased load'
+
+Parameters:
+  ApiEndpoint:
+    Type: String
+    Description: 'The API endpoint URL to test'
+  
+  CanaryRuntimeVersion:
+    Type: String
+    Description: 'Runtime version for the canary. See here for more information https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries_Library.html'
+    Default: 'syn-nodejs-puppeteer-9.1'
+
+  CanaryFrequency:
+    Type: String
+    Description: 'Frequency of canary runs (in minutes)'
+    Default: '5'
+    AllowedValues: ['1', '5', '10', '15', '30', '60']
+
+  RequestsPerRun:
+    Type: Number
+    Description: 'Number of requests to send per canary run'
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+
+Resources:
+  CanaryArtifactsBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join 
+        - '-'
+        - - 'canary-artifacts'
+          - !Select [2, !Split ["/", !Ref AWS::StackId]]
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+      PublicAccessBlockConfiguration:
+        IgnorePublicAcls: true
+      ObjectLockEnabled: true
+      VersioningConfiguration:
+        Status: Enabled
+  
+  CanaryArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CanaryArtifactsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCanaryPutObjects
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt SyntheticsCanaryRole.Arn
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !Sub 'arn:aws:s3:::${CanaryArtifactsBucket}'
+              - !Sub 'arn:aws:s3:::${CanaryArtifactsBucket}/*'
+
+  SyntheticsCanaryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchSyntheticsFullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3BucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${CanaryArtifactsBucket}'
+                  - !Sub 'arn:aws:s3:::${CanaryArtifactsBucket}/*'
+      
+
+  SyntheticsCanary:
+    Type: AWS::Synthetics::Canary
+    Properties:
+      Name: !Join 
+        - '-'
+        - - 'canary'
+          - !Select [2, !Split ["/", !Ref AWS::StackId]]
+      ArtifactS3Location: !Join
+        - '/'
+        - - !Sub 's3://${CanaryArtifactsBucket}'
+          - !Select [2, !Split ["/", !Ref AWS::StackId]]
+      ExecutionRoleArn: !GetAtt SyntheticsCanaryRole.Arn
+      RuntimeVersion: !Ref CanaryRuntimeVersion
+      Schedule:
+        Expression: !Sub 'rate(${CanaryFrequency} minutes)'
+      StartCanaryAfterCreation: true
+      RunConfig:
+        TimeoutInSeconds: 300
+        EnvironmentVariables:
+          API_ENDPOINT: !Ref ApiEndpoint
+          REQUESTS_PER_RUN: !Ref RequestsPerRun
+      Code:
+        Handler: index.handler
+        Script: |
+          const synthetics = require('Synthetics');
+          const https = require('https');
+          const log = require('SyntheticsLogger');
+
+          const apiEndpoint = process.env.API_ENDPOINT;
+          const requestsPerRun = parseInt(process.env.REQUESTS_PER_RUN, 10);
+
+          const postData = async function () {
+              const userId = `user_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+              const userData = {
+                  name: `Test User ${userId}`,
+                  age: Math.floor(Math.random() * 62) + 18,
+                  email: `${userId}@example.com`
+              };
+
+              const postBody = JSON.stringify({
+                  userId: userId,
+                  userData: userData
+              });
+
+              const requestOptions = {
+                  hostname: new URL(apiEndpoint).hostname,
+                  port: 443,
+                  protocol: 'https:',
+                  method: 'POST',
+                  path: new URL(apiEndpoint).pathname,
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'Content-Length': Buffer.byteLength(postBody)
+                  }
+              };
+
+              return new Promise((resolve, reject) => {
+                  const req = https.request(requestOptions, (res) => {
+                      let responseBody = '';
+                      res.on('data', (chunk) => {
+                          responseBody += chunk;
+                      });
+
+                      res.on('end', () => {
+                          if (res.statusCode !== 200) {
+                              reject(new Error(`Failed with status code: ${res.statusCode}`));
+                          } else {
+                              resolve({
+                                  statusCode: res.statusCode,
+                                  body: responseBody
+                              });
+                          }
+                      });
+                  }).on('error', (e) => {
+                      reject(e);
+                  });
+
+                  req.write(postBody);
+                  req.end();
+              });
+          };
+
+          const apiCanaryBlueprint = async function () {
+              const promises = [];
+              for (let i = 0; i < requestsPerRun; i++) {
+                  promises.push(postData());
+              }
+
+              try {
+                  const results = await Promise.all(promises);
+                  log.info(`Successfully sent ${requestsPerRun} requests`);
+                  results.forEach((result, index) => {
+                      log.info(`Response ${index + 1}: ${JSON.stringify(result)}`);
+                  });
+              } catch (err) {
+                  log.error('API check failed: ' + err);
+                  throw err;
+              }
+          };
+
+          exports.handler = async () => {
+              return await apiCanaryBlueprint();
+          };
+
+
+Outputs:
+  CanaryName:
+    Description: 'Name of the created CloudWatch Synthetics Canary'
+    Value: !Ref SyntheticsCanary

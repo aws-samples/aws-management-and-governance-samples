@@ -1,0 +1,8 @@
+{
+    "yaml.schemas": {
+        "https://raw.githubusercontent.com/awslabs/goformation/master/schema/cloudformation.schema.json": [
+            "file:///Users/andress/Documents/github/aws-management-and-governance-samples/AmazonObservability/AmazonQOperations/SyntheticsCanary.yml",
+            "file:///Users/andress/Documents/github/aws-management-and-governance-samples/AmazonObservability/AmazonCloudWatchLogs/LogInsightsUsage/templates/CWLogInsightsUsageDashboard/CWLogInsightsUsageDashboard.yaml"
+        ]
+    }
+}

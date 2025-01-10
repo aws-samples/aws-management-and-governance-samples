@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Stack for testing Amazon Q Operational Investigation with API Gateway, Lambda, and DynamoDB'
+
+Resources:
+  UserDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: UserData
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt UserDataTable.Arn
+
+  UserDataProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: UserDataProcessor
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import time
+          from botocore.exceptions import ClientError
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('UserData')
+
+          def lambda_handler(event, context):
+              try:
+                  body = json.loads(event['body'])
+                  user_id = body.get('userId', str(int(time.time())))
+                  user_data = body.get('userData', {})
+                  
+                  response = table.put_item(
+                      Item={
+                          'userId': user_id,
+                          'userData': user_data
+                      }
+                  )
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps('Data stored successfully'),
+                      'headers': {
+                          'Content-Type': 'application/json'
+                      }
+                  }
+              except ClientError as e:
+                  print(e.response['Error']['Message'])
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps('Error storing data'),
+                      'headers': {
+                          'Content-Type': 'application/json'
+                      }
+                  }
+              except Exception as e:
+                  print(str(e))
+                  return {
+                      'statusCode': 400,
+                      'body': json.dumps('Invalid input'),
+                      'headers': {
+                          'Content-Type': 'application/json'
+                      }
+                  }
+      Runtime: python3.9
+      Timeout: 10
+      MemorySize: 128
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: UserDataAPI
+      Description: API for UserData processing
+
+  ApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: users
+      RestApiId: !Ref ApiGateway
+
+  ApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub 
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !GetAtt UserDataProcessorFunction.Arn
+      ResourceId: !Ref ApiResource
+      RestApiId: !Ref ApiGateway
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: prod
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt UserDataProcessorFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/POST/users
+
+Outputs:
+  ApiUrl:
+    Description: URL of the API endpoint
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/users
+

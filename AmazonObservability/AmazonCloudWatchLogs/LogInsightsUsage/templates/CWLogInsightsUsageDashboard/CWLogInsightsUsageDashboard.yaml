@@ -1,25 +1,57 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
-Description: This template will create all required resources to deploy a CloudWatchj dashboard custom widget. The widget will execute lambda code in the current account that will display a list of all the queries executed in the last few days and order them by the amount of bytes scanned. This is helpful when you need to understand which queries are scanning a lot of data and might be candidates for optmization.
+Description: This template will create all required resources to deploy a CloudWatch dashboard custom widget. The widget will execute lambda code in the current account that will display a list of all the queries executed in the last few days and order them by the amount of bytes scanned. It will also display an estmated cost for the query based on us-east-1 pricing. This is helpful when you need to understand which queries are scanning a lot of data and might be candidates for optmization.
 
 Parameters:
-  DoCreateExampleDashboard:
-    Description: Create the Dashboard to show the widget. Select No to deploy the Lambda function only. 
+  
+  ScheduleIntervalMinutes:
+    Type: Number
+    Default: 5
+    Description: The number of minutes between each execution of the Lambda function to refresh the dashboard file stored in S3. 
+  
+  S3KeyPrefix:
     Type: String
-    AllowedValues: [ 'Yes', 'No']
-    Default: 'Yes'
-
-Conditions:
-  CreateExampleDashboard: !Equals ["Yes", !Ref DoCreateExampleDashboard]
+    Description: The key prefix (path) and file name of the report that will be generated
+    Default: "dashboards/liusagereport.html"
 
 Resources:
+  
+  LogInsightsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      ObjectLockEnabled: true
+     
+  LogInsightsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LogInsightsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaAccess
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub '${LogInsightsBucket.Arn}/*'
+
   lambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
       Code:
         ZipFile: |
-
-          import boto3
+          import boto3, os
           from botocore.exceptions import ClientError
 
           def get_current_region():
@@ -33,6 +65,56 @@ Resources:
               except ClientError:
                   # If we can't get the region, return None
                   return None
+
+          def calculate_query_metrics(bytes_scanned, region):
+              gb_scanned = bytes_scanned / (1024 * 1024 * 1024)  # Convert to GB
+              mb_scanned = bytes_scanned / (1024 * 1024)  # Convert to MB
+
+              metrics = {
+                  'bytes_scanned': bytes_scanned,
+                  'megabytes_scanned': round(mb_scanned, 2),
+                  'gigabytes_scanned': round(gb_scanned, 4),
+                  'estimated_cost': "${:,.2f}".format(gb_scanned * 0.005) # $5 per TB in us-east-1 based on https://aws.amazon.com/cloudwatch/pricing/
+              }
+              
+              return metrics
+
+          def write_html_to_s3(html_content):
+              """
+              Writes HTML content to an S3 bucket
+              
+              Parameters:
+                  html_content (str): The HTML content to write to S3
+              
+              Returns:
+                  bool: True if successful, False otherwise
+              """
+              # Get bucket and file name from environment variables
+              bucket_name = os.environ.get('S3_BUCKET')
+              file_name = os.environ.get('S3_KEY_PREFIX')
+              
+              # Validate environment variables
+              if not bucket_name or not file_name:
+                  print("Error: S3_BUCKET and S3_FILE_NAME environment variables must be set")
+                  return False
+              
+              # Initialize S3 client
+              s3_client = boto3.client('s3')
+              
+              try:
+                  # Upload the HTML content to S3
+                  s3_client.put_object(
+                      Bucket=bucket_name,
+                      Key=file_name,
+                      Body=html_content,
+                      ContentType='text/html'
+                  )
+                  print(f"Successfully wrote HTML to s3://{bucket_name}/{file_name}")
+                  return True
+                  
+              except ClientError as e:
+                  print(f"Error writing to S3: {str(e)}")
+                  return False
 
           def lambda_handler(event, context):
               current_region = get_current_region()
@@ -64,29 +146,123 @@ Resources:
                       # Convert bytesScanned to a number for sorting
                       bytes_scanned_num = float(bytes_scanned) if bytes_scanned != 'N/A' else float('-inf')
 
+                      metrics = calculate_query_metrics(bytes_scanned_num, current_region)
                       query_data.append({
                           'query_id': query_id,
                           'query_string': query_string,
                           'records_matched': records_matched,
                           'records_scanned': records_scanned,
                           'bytes_scanned': bytes_scanned,
-                          'bytes_scanned_num': bytes_scanned_num
+                          'bytes_scanned_num': bytes_scanned_num,
+                          'megabytes_scanned': metrics['megabytes_scanned'],
+                          'gigabytes_scanned': metrics['gigabytes_scanned'],
+                          'estimated_cost': metrics['estimated_cost']
                       })
 
                   # Sort the data by bytesScanned
                   sorted_data = sorted(query_data, key=lambda x: x['bytes_scanned_num'], reverse=True)
 
                   # Generate the HTML table
-                  html_table = "<table border='1'><tr><th>Query ID</th><th>Query String</th><th>Records Matched</th><th>Records Scanned</th><th>Bytes Scanned</th></tr>"
+                  html_table = "<table border='1'><tr><th>Query ID</th><th>Query String</th><th>Records Matched</th><th>Records Scanned</th><th>GB Scanned</th><th>Estimated Cost</th></tr>"
 
                   for item in sorted_data:
-                      html_table += f"<tr><td>{item['query_id']}</td><td>{item['query_string']}</td><td>{item['records_matched']}</td><td>{item['records_scanned']}</td><td>{item['bytes_scanned']}</td></tr>"
+                      html_table += f"<tr><td>{item['query_id']}</td><td>{item['query_string']}</td><td>{item['records_matched']}</td><td>{item['records_scanned']}</td><td>{item['gigabytes_scanned']}</td><td>{item['estimated_cost']}</td></tr>"
 
                   html_table += "</table>"
-                  return html_table
+                  
+                  html_content = f"""
+                  <!DOCTYPE html>
+                  <html>
+                  <head>
+                      <title>CloudWatch Logs Insights Usage Report</title>
+                      <p>Estimated cost is based on prices for us-east-1. Prices in other regions may vary</p>
+                      <style>
+                          @media (prefers-color-scheme: dark) {{
+                              body {{
+                                  background-color: #1a1a1a;
+                                  color: #e0e0e0;
+                              }}
+                              th {{
+                                  background-color: #4a4a4a;
+                                  color: #ffffff;
+                              }}
+                              tr:nth-child(odd) {{
+                                  background-color: #2d2d2d;
+                                  color: #e0e0e0;
+                              }}
+                              tr:nth-child(even) {{
+                                  background-color: #3d3d3d;
+                                  color: #e0e0e0;
+                              }}
+                          }}
+                          
+                          @media (prefers-color-scheme: light) {{
+                              body {{
+                                  background-color: #ffffff;
+                                  color: #000000;
+                              }}
+                              th {{
+                                  background-color: #f2f2f2;
+                                  color: #000000;
+                              }}
+                              tr:nth-child(odd) {{
+                                  background-color: #ffffff;
+                                  color: #000000;
+                              }}
+                              tr:nth-child(even) {{
+                                  background-color: #f5f5f5;
+                                  color: #000000;
+                              }}
+                          }}
+                          
+                          table {{
+                              border-collapse: collapse;
+                              width: 100%;
+                          }}
+                          th {{
+                              padding: 12px;
+                              text-align: left;
+                          }}
+                          td {{
+                              max-width: 300px;
+                              padding: 8px;
+                              vertical-align: top;
+                              word-wrap: break-word;
+                          }}
+                          .query-cell {{
+                              max-height: 150px;
+                              overflow-y: auto;
+                              padding: 8px;
+                              line-height: 1.4;
+                          }}
+                          td:nth-child(2) {{
+                              min-height: 50px;
+                          }}
+                          tr:hover {{
+                              filter: brightness(110%);
+                          }}
+                      </style>
+                  </head>
+                  <body>
+                      <h1>CloudWatch Logs Insights Usage Report</h1>
+                      {html_table}
+                  </body>
+                  </html>
+                  """
+
+
+                  
+                  # Write to S3
+                  write_html_to_s3(html_content)
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': 'Report generated and uploaded to S3'
+                  }
 
               except ClientError as e:
                   return f"<p>An error occurred: {e}</p>"
+
       Description: "CloudWatch Custom Widget for Log Insights query history"
       FunctionName: !Sub ${AWS::StackName}
       Handler: index.lambda_handler
@@ -94,9 +270,32 @@ Resources:
       Role: !GetAtt lambdaIAMRole.Arn
       Runtime: python3.11
       Timeout: 60
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref LogInsightsBucket
+          S3_KEY_PREFIX: !Ref S3KeyPrefix
       Tags:
         - Key: cw-custom-widget
           Value: describe:readOnly
+
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Schedule rule to trigger Lambda function"
+      ScheduleExpression: !Sub "rate(${ScheduleIntervalMinutes} minutes)"
+      State: "ENABLED"
+      Targets: 
+        - Arn: !GetAtt lambdaFunction.Arn
+          Id: !Ref lambdaFunction
+  
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref lambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt ScheduledRule.Arn
+      
 
   lambdaIAMRole:
     Type: AWS::IAM::Role
@@ -127,6 +326,12 @@ Resources:
                 Resource:
                   - '*'
                 Effect: Allow
+              - Action:
+                - s3:PutObject
+                - s3:GetObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${LogInsightsBucket}/${S3KeyPrefix}*
+                Effect: Allow
           PolicyName: lambda
 
 
@@ -136,23 +341,115 @@ Resources:
       LogGroupName: !Sub /aws/lambda/${AWS::StackName}
       RetentionInDays: 7
 
-  demoDashboard:
-    Type: AWS::CloudWatch::Dashboard
-    Condition: CreateExampleDashboard
+ 
+  DashboardWidgetFunction:
+    Type: AWS::Lambda::Function
     Properties:
-      DashboardName: !Sub ${AWS::StackName}-${AWS::Region}
-      DashboardBody:
-        !Sub
-          >
-          {
-              "widgets": [
-                  {
-                      "type": "custom",
-                      "width": 8,
-                      "height": 8,
-                      "properties": {
-                          "endpoint": "${lambdaFunction.Arn}"
-                      }
-                  }
-              ]
-          }
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import os
+
+          s3 = boto3.client('s3')
+          def lambda_handler(event, context):
+              bucket = os.environ['S3_BUCKET']
+              prefix = os.environ['S3_KEY_PREFIX']
+              
+              try:
+                  # List objects to get the latest file
+                  response = s3.list_objects_v2(
+                      Bucket=bucket,
+                      Prefix=prefix,
+                      MaxKeys=1
+                  )
+                  
+                  if 'Contents' not in response or not response['Contents']:
+                      return "<p>No report files found</p>"
+                      
+                  # Get the latest file
+                  latest_file = response['Contents'][0]['Key']
+                  
+                  # Get the file content
+                  file_obj = s3.get_object(Bucket=bucket, Key=latest_file)
+                  file_content = file_obj['Body'].read().decode('utf-8')
+                  
+                  return file_content
+                  
+              except Exception as e:
+                  return f"<p>Error reading report: {str(e)}</p>"
+
+      Description: "CloudWatch Dashboard Widget Lambda function to read S3 reports"
+      FunctionName: !Sub "${AWS::StackName}-dashboard-widget"
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt DashboardWidgetRole.Arn
+      Runtime: python3.11
+      Timeout: 30
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref LogInsightsBucket
+          S3_KEY_PREFIX: !Ref S3KeyPrefix
+
+
+  DashboardWidgetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${LogInsightsBucket}
+                  - !Sub arn:${AWS::Partition}:s3:::${LogInsightsBucket}/${S3KeyPrefix}*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-dashboard-widget:*
+
+  
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}-log-insights-usage"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "custom",
+              "width": 24,
+              "height": 12,
+              "x": 0,
+              "y": 0,
+              "properties": {
+                "title": "Log Insights Usage Report",
+                "endpoint": "${DashboardWidgetFunction.Arn}",
+                "updateOn": {
+                  "refresh": true,
+                  "resize": true,
+                  "timeRange": true
+                }
+              }
+            }
+          ]
+        }
+
+  DashboardWidgetLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-dashboard-widget
+      RetentionInDays: 7
