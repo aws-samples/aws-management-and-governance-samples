@@ -1,0 +1,306 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: A template to deploy the cloudtrail-lake-analysis lambda function and cache table to create cloudwatch widgets for CloudTrail Lake.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterLabels:
+      cloudtraileds:
+        default: "CloudTrail Lake Event data store ARN"
+Parameters:
+  cloudtraileds:
+    Type: String
+    Description: Provide the ARN of your CloudTrail Lake Event data store.
+Resources:
+  BedrockCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: cloudtrail_lake_query
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cloudtrail_lake_query
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+  
+  ScopedCustomPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      Roles:
+        - !Ref LambdaBedrockCTExecutionRole
+      PolicyName: DynamoBedrockScopedPolicyForCloudTrailLake
+      PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
+                  - !GetAtt BedrockCacheTable.Arn
+
+  ScopedCustomCTLakePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      Roles:
+        - !Ref LambdaBedrockCTExecutionRole
+      PolicyName: ScopedPolicyForCloudTrailLake
+      PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+              - Effect: Allow
+                Action:
+                  - cloudtrail:GetQueryResults
+                  - cloudtrail:DescribeQuery
+                  - cloudtrail:StartQuery
+                Resource: !Ref cloudtraileds
+
+  LambdaBedrockCTExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
+
+  LambdaFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: "KMS Encryption is not necessary for demonstration purposes"
+    Properties:
+      RetentionInDays: 7
+      LogGroupName: ct-bedrock-lambda-log
+
+  BedrockLogCTFunction:
+    DependsOn: ScopedCustomPolicy
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: "This function does not access any VPC resources"
+    Properties:
+      LoggingConfig:
+        LogGroup: !Ref LambdaFunctionLogGroup
+      FunctionName: BedrockCloudTrailAnalysisFunction
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaBedrockCTExecutionRole.Arn
+      Environment:
+        Variables:
+          cache_name: !Ref BedrockCacheTable
+      Runtime: python3.12
+      ReservedConcurrentExecutions: 5
+      Timeout: 45
+      Code:
+        ZipFile: |
+          import os
+          import time
+          from typing import Optional
+          from dataclasses import dataclass
+          import boto3
+          import json
+          from botocore.exceptions import ClientError
+
+
+          # Create Bedrock prompt struct for the request to invoke.
+          @dataclass
+          class BedrockBody:
+              prompt: str
+              max_tokens_to_sample: int
+              temperature: float
+              top_p: float
+              anthropic_version: str = "bedrock-2023-05-31"
+
+              def to_dict(self):
+                  return {
+                      "messages": [{"role": "user", "content": self.prompt}],
+                      "max_tokens": self.max_tokens_to_sample,
+                      "temperature": self.temperature,
+                      "top_p": self.top_p,
+                      "anthropic_version": self.anthropic_version,
+                  }
+
+
+          # Create a struct to handle the items from the cache.
+          @dataclass
+          class CacheItem:
+              cloudtrail_lake_query: str
+              summary: str
+              timestamp: int
+
+
+          # We can get responses from DynamoDB cache, this makes the widget load much faster.
+          def get_summary_cache(cloudtrail_lake_query: str) -> Optional[CacheItem]:
+              dynamodb = boto3.resource("dynamodb")
+              table = dynamodb.Table(os.environ["cache_name"])
+
+              try:
+                  response = table.get_item(Key={"cloudtrail_lake_query": cloudtrail_lake_query})
+              except ClientError as e:
+                  return e.response["Error"]["Message"]
+
+              if "Item" in response:
+                  return CacheItem(**response["Item"])
+              else:
+                  return None
+
+
+          # If the summary is not in the cache, we should put it in after doing the fetch_ctl_query_results
+          def put_summary(cloudtrail_lake_query: str, summary: str) -> None:
+              dynamodb = boto3.resource("dynamodb")
+              table = dynamodb.Table(os.environ["cache_name"])
+
+              timestamp = int(time.time())
+              table.put_item(
+                  Item={
+                      "cloudtrail_lake_query": cloudtrail_lake_query,
+                      "summary": summary,
+                      "timestamp": timestamp,
+                  }
+              )
+
+
+          # Format the response from Bedrock because we only care about the completion section here.
+          def response_format(response_string: str) -> str:
+              try:
+                  json_response = json.loads(response_string)
+              except json.JSONDecodeError as e:
+                  raise e
+
+              content = json_response["content"][0].get("text", "")
+              return content.replace("\n", "<br />")
+
+
+          # Call on Bedrock API for summary of data.
+          def bedrock_analyze(result_string: str) -> str:
+              body = BedrockBody(
+                  prompt=f"Please create some insights on the following cloudtrail query.{result_string}",
+                  max_tokens_to_sample=1000,
+                  temperature=0,
+                  top_p=1,
+              )
+
+              blob_body = bytes(json.dumps(body.to_dict()), "utf-8")
+
+              bedrock_client = boto3.client("bedrock-runtime")
+
+              bedrock_resp = bedrock_client.invoke_model(
+                  modelId="anthropic.claude-3-haiku-20240307-v1:0",
+                  body=blob_body,
+                  contentType="application/json",
+              )
+
+              response_blob = bedrock_resp["body"].read()
+              response_string = response_blob.decode("utf-8")
+
+              response_string_formatted = response_format(response_string)
+
+              return response_string_formatted
+
+          # Fetch CloudTrail Lake query results from query
+          def fetch_ctl_query_results(cloudtrail_lake_query: str) -> str:
+              cloudtrail_client = boto3.client('cloudtrail')
+              response = cloudtrail_client.start_query(
+              QueryStatement=cloudtrail_lake_query
+              )
+              query_id = response['QueryId']
+              response = cloudtrail_client.get_query_results(
+              QueryId=query_id
+              )
+              # Wait for the query to complete
+              while True:
+                  status = cloudtrail_client.describe_query(QueryId=query_id)['QueryStatus']
+                  print(status)
+                  if status in ['COMPLETE', 'FAILED', 'CANCELLED', 'FINISHED']:
+                      break
+                  time.sleep(5)  # Wait for 5 seconds before checking again
+
+              # If the query completed successfully, get the results
+              if status == 'FINISHED':
+                  result_string = cloudtrail_client.get_query_results(QueryId=query_id)
+
+              if not result_string:
+                  raise Exception("Unable to pull any events from the cloudtrail lake query.")
+
+              analysis = bedrock_analyze(result_string)
+              put_summary(cloudtrail_lake_query, analysis)
+              return analysis
+
+
+          def lambda_handler(event: dict, context: dict) -> str:
+            if event.get("describe"):
+                docs = """## Python Bedrock Analysis
+                This is a widget where we will use Bedrock to analyze a CloudTrail Lake Query, then return the output summary.
+                ### Widget parameters
+                Param | Description
+                ---|---
+                **cloudtrail_lake_query** | The CloudTrail Lake Query to summarize
+                **cloudtrail_lake_query_name** | The CloudTrail Lake Query name to summarize
+
+                ### Example Parameters
+                ``` yaml
+                cloudtrail_lake_query: "SELECT eventSource, eventName, COUNT(*) AS apiCount FROM $EDS_ID WHERE eventTime > DATE_ADD('week', -1, CURRENT_TIMESTAMP) GROUP BY eventSource, eventName ORDER BY apiCount DESC"
+                cloudtrail_lake_query_name: "Top APIs aggregated by source"
+                ```
+                """
+                return docs
+
+            cloudtrail_lake_query = event["widgetContext"]["params"].get("cloudtrail_lake_query")
+            cloudtrail_lake_query_name = event["widgetContext"]["params"].get("cloudtrail_lake_query_name")
+            print(f"The cloudtrail lake query is: {cloudtrail_lake_query}")
+
+
+            if not cloudtrail_lake_query:
+                return "Missing 'cloudtrail_lake_query' parameter in the request payload."
+                
+            # Encode log group name for use in deep links
+            encoded_log_group_name = cloudtrail_lake_query.replace("/", "$252F")
+            
+            # Get time for cache check
+            timestamp_now = int(time.time())
+
+            # Initializing string for insertion into f string html
+            payload_string = '{"retry":"true"}'
+
+            cache_item = get_summary_cache(cloudtrail_lake_query)
+            if (
+                cache_item
+                and timestamp_now - cache_item.timestamp < 30 * 60
+                and "retry" not in event
+            ):
+                html = f"""
+                <h2>CloudTrail Lake {cloudtrail_lake_query_name} Query Summary</h2>
+                <p>{cache_item.summary}</p>
+                <a class="btn btn-primary">Fetch a new Summary</a>
+                <cwdb-action action="call" endpoint="{context.invoked_function_arn}">
+                    {payload_string}
+                </cwdb-action>
+                """
+                return html
+            else:
+                analysis = fetch_ctl_query_results(cloudtrail_lake_query)
+                html = f"""
+                <h2>CloudTrail Lake {cloudtrail_lake_query_name} Query Summary</h2>
+                <p>{analysis}</p>
+                <a class="btn btn-primary">Fetch a new Summary</a>
+                <cwdb-action action="call" endpoint="{context.invoked_function_arn}">
+                    {payload_string}
+                </cwdb-action>
+                """
+                return html
