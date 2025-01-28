@@ -12,7 +12,10 @@ Resources:
       KeySchema:
         - AttributeName: userId
           KeyType: HASH
-      BillingMode: PAY_PER_REQUEST
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
@@ -30,6 +33,8 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/CloudWatchLambdaApplicationSignalsExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
       Policies:
         - PolicyName: DynamoDBAccess
           PolicyDocument:
@@ -96,6 +101,13 @@ Resources:
       Runtime: python3.9
       Timeout: 10
       MemorySize: 128
+      Environment:
+        Variables:
+          AWS_LAMBDA_EXEC_WRAPPER: /opt/otel-instrument
+      Layers:
+      - !Sub "arn:aws:lambda:${AWS::Region}:615299751070:layer:AWSOpenTelemetryDistroPython:12"
+      TracingConfig:
+        Mode: Active
 
   ApiGateway:
     Type: AWS::ApiGateway::RestApi
