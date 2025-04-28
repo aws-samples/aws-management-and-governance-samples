@@ -370,7 +370,7 @@ Resources:
       FunctionName: SSM-DeleteGlueTableColumnFunction
       Description:
         Deletes the 'resourcetype' Glue table that causes an issue when loading partitions in Athena
-      Runtime: python3.7
+      Runtime: python3.10
       Handler: index.lambda_handler
       MemorySize: 128
       Timeout: 600

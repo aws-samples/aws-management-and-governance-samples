@@ -257,7 +257,7 @@ Resources:
       FunctionName: MultiAccountPatching
       Handler: index.handler
       Role: !GetAtt AWSLambdaSSMMultiAccountRole.Arn 
-      Runtime: python3.7
+      Runtime: python3.10
       
   #-------------------------------------------------
   # Automation document to run AWS-RunPatchBaseline on target resources
