@@ -1,0 +1,169 @@
+#*
+#* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#* SPDX-License-Identifier: MIT-0
+#*
+#* Permission is hereby granted, free of charge, to any person obtaining a copy of this
+#* software and associated documentation files (the "Software"), to deal in the Software
+#* without restriction, including without limitation the rights to use, copy, modify,
+#* merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+#* permit persons to whom the Software is furnished to do so.
+#*
+#* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+#* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+#* PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+#* HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#* OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+#* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#*
+
+#------------------------------------------------------------------------------
+#
+# Template: just-in-time-quick-setup-cfn-template.yaml
+# Purpose: CloudFormation template to deploy a Quick Setup configuration for the Systems Manager unified console and just-in-time node access.
+#
+#------------------------------------------------------------------------------
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to deploy a Quick Setup configuration for the Systems Manager unified console and just-in-time node access.
+Parameters:
+  DelegatedAccountId:
+    Type: String
+    Description: AWS Account ID for the Systems Manager delegated administrator account.
+    Default: "223429074223"
+    AllowedPattern: "^\\d{12}$"
+  HomeRegion:
+    Type: String
+    Description: AWS Region where the Systems Manager unified console is deployed.
+    Default: ca-central-1
+  IdentityProviderSetting:
+    Type: String
+    Description: (Optional) Specifies identity provider IAM Identity Access Management (IAM) or Single Sign-On (SSO) used for determining who is the current access control template approver.
+    Default: IAM
+    AllowedValues:
+      - IAM
+      - SSO
+  UnifiedConsoleTargetOrganizationalUnits:
+    Type: String
+    Description: AWS Account IDs where the Systems Manager unified console is deployed.
+    Default: r-e47y
+  UnifiedConsoleTargetRegions:
+    Type: String
+    Description: Comma-separated list of AWS Regions where the Systems Manager unified console is set up. Data is aggregated from these Regions and replicated to your home Region.
+    Default: ca-central-1
+  JITNATargetOrganizationalUnits:
+    Type: String
+    Description: AWS Account IDs where just-in-time node access is set up.
+    Default: r-e47y
+  JITNATargetRegions:
+    Type: String
+    Description: The Regions where you want to enable just-in-time node access. The Regions specified must either match the Regions specified in the parameter UnifiedConsoleTargetRegions or must be a subset of Regions specified in the parameter UnifiedConsoleTargetRegions.
+    Default: ca-central-1
+
+Resources:
+  #-------------------------------------------------
+  # Quick Setup IAM Roles
+  # User Guide documentation on permissions: https://docs.aws.amazon.com/systems-manager/latest/userguide/quick-setup-getting-started.html
+  #-------------------------------------------------
+  QuickSetupAdministrationRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/AWS-QuickSetup-StackSet-Local-ExecutionRole
+          Effect: Allow
+      PolicyName: AssumeRole-AWSQuickSetupStackSetLocalAdministrationRole
+      Roles:
+        - !Ref QuickSetupAdministrationRole
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
+
+  QuickSetupAdministrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AWS-QuickSetup-StackSet-Local-AdministrationRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: cloudformation.amazonaws.com
+          Action: 
+          - sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount: !Ref AWS::AccountId
+            StringLike:
+              aws:SourceArn: !Sub arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stackset/AWS-QuickSetup-*
+      Path: "/"
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
+
+  QuickSetupExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AWS-QuickSetup-StackSet-Local-ExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS: !GetAtt QuickSetupAdministrationRole.Arn
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupDeploymentRolePolicy
+      # - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupPatchPolicyDeploymentRolePolicy
+      # - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupSSMDeploymentRolePolicy
+      # - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupSSMDeploymentS3BucketRolePolicy
+      Path: "/"
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
+
+  #-------------------------------------------------
+  # Quick Setup Configuration Manager for Systems Manager unified console
+  #-------------------------------------------------
+  SSMUnifiedConsoleQuickSetupConfigurationManager:
+    Type: AWS::SSMQuickSetup::ConfigurationManager
+    Properties:
+      Name: ssm-console
+      Description: Enable the Systems Manager unified console for the AWS Organization
+      ConfigurationDefinitions:
+      - Type: AWSQuickSetupType-SSM
+        LocalDeploymentAdministrationRoleArn: !GetAtt QuickSetupAdministrationRole.Arn
+        LocalDeploymentExecutionRoleName: !Ref QuickSetupExecutionRole
+        Parameters:
+          DelegatedAccountId: !Ref DelegatedAccountId
+          HomeRegion: !Ref HomeRegion
+          TargetOrganizationalUnits: !Ref UnifiedConsoleTargetOrganizationalUnits
+          TargetRegions: !Ref UnifiedConsoleTargetRegions
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
+
+  #-------------------------------------------------
+  # Quick Setup Configuration Manager for Systems Manager just-in-time node access
+  #-------------------------------------------------
+  JITNAQuickSetupConfigurationManager:
+    DependsOn: SSMUnifiedConsoleQuickSetupConfigurationManager
+    Type: AWS::SSMQuickSetup::ConfigurationManager
+    Properties:
+      Name: jitna
+      Description: Enable the Just-in-Time Node Access First Run Experience
+      ConfigurationDefinitions:
+      - Type: AWSQuickSetupType-JITNA
+        LocalDeploymentAdministrationRoleArn: !GetAtt QuickSetupAdministrationRole.Arn
+        LocalDeploymentExecutionRoleName: !Ref QuickSetupExecutionRole
+        Parameters:
+          DelegatedAccountId: !Ref DelegatedAccountId
+          HomeRegion: !Ref HomeRegion
+          IdentityProviderSetting: !Ref IdentityProviderSetting
+          TargetOrganizationalUnits: !Ref JITNATargetOrganizationalUnits
+          TargetRegions: !Ref JITNATargetRegions
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access

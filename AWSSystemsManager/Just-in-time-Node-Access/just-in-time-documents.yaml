@@ -1,0 +1,111 @@
+#*
+#* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#* SPDX-License-Identifier: MIT-0
+#*
+#* Permission is hereby granted, free of charge, to any person obtaining a copy of this
+#* software and associated documentation files (the "Software"), to deal in the Software
+#* without restriction, including without limitation the rights to use, copy, modify,
+#* merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+#* permit persons to whom the Software is furnished to do so.
+#*
+#* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+#* INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+#* PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+#* HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#* OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+#* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#*
+
+#------------------------------------------------------------------------------
+#
+# Template: just-in-time-documents.yaml
+# Purpose: CloudFormation template to deploy approval policies and Session Preferences document for just-in-time node access.
+#
+#------------------------------------------------------------------------------
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to deploy approval policies and Session Preferences document for just-in-time node access.
+Resources:
+  #-------------------------------------------------
+  # Auto-approval and sample manual approval policy
+  #-------------------------------------------------
+  AutoApprovalPolicy:
+    Type: AWS::SSM::Document
+    Properties:
+      Content:
+        schemaVersion: '0.3'
+        description: Description of the document
+        accessTokenRole: SSM-JustInTimeAccessTokenRole
+        accessDuration: 3600
+        AutoApprovalPolicyDocuments:
+        - id: optional field
+          description: optional description field
+          type: Cedar
+          content: "// Policy to permit access to DEV nodes\r\npermit (\r\n    principal,
+            \r\n    action == AWS::SSM::Action::\"getTokenForInstanceAccess\", \r\n    resource)\r\n
+            \ when {\r\n    resource.hasTag(\"ENV\") && \r\n    resource.getTag(\"ENV\") ==
+            \"DEV\"\r\n  };"
+      DocumentFormat: YAML
+      DocumentType: AutoApprovalPolicy
+      Name: SSM-JustInTimeAccessAutoApprovalPolicy
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
+
+  ManualApprovalPolicy:
+    Type: AWS::SSM::Document
+    Properties:
+      Content:
+        schemaVersion: '0.3'
+        accessDuration: 86400
+        description: ''
+        accessTokenRole: SSM-JustInTimeAccessTokenRole
+        targets:
+        - Key: tag:ENV
+          Values:
+          - PROD
+        mainSteps:
+        - name: ManualApproval
+          action: aws:approve
+          timeoutSeconds: 604800
+          inputs:
+            Message: Please approve this request
+            MinRequiredApprovals: 1
+            EnhancedApprovals:
+              Approvers:
+              - approver: ec4df598-7071-70a6-0de4-f06c8908bac5
+                type: SSOGroup
+      DocumentFormat: YAML
+      DocumentType: ManualApprovalPolicy
+      Name: Production-Manual-Approval-Policy
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
+
+  SessionPreferences:
+    Type: AWS::SSM::Document
+    Properties:
+      Content:
+        schemaVersion: '1.0'
+        description: Document to hold regional settings for Session Manager
+        sessionType: Standard_Stream
+        inputs:
+          s3BucketName: ''
+          s3KeyPrefix: ''
+          s3EncryptionEnabled: true
+          cloudWatchLogGroupName: !Sub session-manager-${AWS::Region}
+          cloudWatchEncryptionEnabled: 'false'
+          cloudWatchStreamingEnabled: true
+          idleSessionTimeout: '20'
+          maxSessionDuration: '60'
+          kmsKeyId: ''
+          runAsEnabled: true
+          runAsDefaultUser: ec2-user
+          shellProfile:
+            windows: ''
+            linux: ''
+      DocumentFormat: YAML
+      DocumentType: Session
+      Name: SSM-SessionManagerRunShell
+      Tags:
+      - Key: AWSSamples
+        Value: Just-in-time-Node-Access
