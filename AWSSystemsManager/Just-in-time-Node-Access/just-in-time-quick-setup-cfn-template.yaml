@@ -116,9 +116,8 @@ Resources:
           Action: sts:AssumeRole
       ManagedPolicyArns:
       - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupDeploymentRolePolicy
+      # Optional managed policy if you do not deploy a Patch Policy configuration manager
       # - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupPatchPolicyDeploymentRolePolicy
-      # - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupSSMDeploymentRolePolicy
-      # - !Sub arn:${AWS::Partition}:iam::aws:policy/AWSQuickSetupSSMDeploymentS3BucketRolePolicy
       Path: "/"
       Tags:
       - Key: AWSSamples
