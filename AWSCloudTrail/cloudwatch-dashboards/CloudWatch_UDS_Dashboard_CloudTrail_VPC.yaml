@@ -1,0 +1,1453 @@
+# MIT No Attribution
+# 
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of
+# this software and associated documentation files (the "Software"), to deal in
+# the Software without restriction, including without limitation the rights to
+# use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+# the Software, and to permit persons to whom the Software is furnished to do so.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+# FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+# IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Sample CloudWatch Dashboard for CloudTrail and VPC Flow Logs using CloudWatch Unified Data Store data sources.
+  Supports Standard AWS and OCSF log formats. Provides security visibility for CloudTrail and VPC Flow Logs.
+  Queries use SOURCE logGroups() with filterIndex @data_source_type and filterIndex @data_source_name to scope to management or data events.
+  No dependency on custom log group names. READ-ONLY dashboard. Enable stack termination protection post-deployment.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Dashboard Configuration"
+        Parameters:
+          - DashboardName
+          - LogFormat
+    ParameterLabels:
+      DashboardName:
+        default: "Dashboard Name"
+      LogFormat:
+        default: "Log Format (Standard or OCSF)"
+
+
+# ============================================================
+# PARAMETERS 
+# ============================================================
+Parameters:
+
+  DashboardName:
+    Type: String
+    Default: CloudTrail-VPC-Dashboard
+    Description: Name for the CloudWatch Dashboard
+    AllowedPattern: '[A-Za-z0-9_-]+'
+    ConstraintDescription: Only alphanumeric characters, hyphens, and underscores allowed.
+    MaxLength: 255
+    MinLength: 1
+
+  LogFormat:
+    Type: String
+    Default: Standard
+    AllowedValues: [Standard, OCSF]
+    Description: >
+      Choose log format: Standard (native AWS CloudTrail/VPC Flow Logs) or OCSF (Open Cybersecurity Schema Framework).
+      OCSF provides normalized security event data across different sources.
+
+
+
+# ============================================================
+# CONDITIONS
+# ============================================================
+Conditions:
+  UseOCSF: !Equals [!Ref LogFormat, OCSF]
+  UseStandard: !Equals [!Ref LogFormat, Standard]
+
+# ============================================================
+# RESOURCES
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # CloudWatch Dashboard - Standard Format
+  # ----------------------------------------------------------
+  SecurityDashboardStandard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: UseStandard
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 2,
+              "properties": {
+                "markdown": "# 🔐 CloudWatch Dashboard for CloudTrail & VPC Flow Logs — CloudWatch Unified Data Store (Standard Format)\n\n**Data Sources:** `aws_cloudtrail` + `amazon_vpc` (auto-discovered via @data_source_name)\n\nThis dashboard provides near-real-time security visibility using standard AWS log formats via CloudWatch Unified Data Store data sources."
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 2,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🚨 Security Overview"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 3,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Error Rate Trend Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, errorCode | filter ispresent(errorCode) | stats count(*) as ErrorCount by bin(5m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 3,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🚨 Top Error Codes (Unauthorized / Access Denied)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, errorCode, errorMessage, userIdentity.arn, eventName, sourceIPAddress, recipientAccountId, awsRegion | filter ispresent(errorCode) | filter errorCode in [\"AccessDenied\", \"UnauthorizedAccess\", \"Client.UnauthorizedAccess\", \"AccessDeniedException\", \"AuthFailure\"] | stats count(*) as ErrorCount by errorCode, eventName, recipientAccountId, awsRegion | sort ErrorCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 9,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "🥧 User Identity Types",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields userIdentity.type | stats count(*) as Count by userIdentity.type",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8,
+              "y": 9,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "🥧 VPC Flow Actions",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields action | stats count(*) as Count by action",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16,
+              "y": 9,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "🔐 Root Account Activity",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, sourceIPAddress, recipientAccountId, awsRegion | filter userIdentity.type = \"Root\" | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 15,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔗 Correlated Security Insights — CloudTrail + VPC Flow Logs"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 16,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "⚠️ Suspicious IPs: API Errors",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields sourceIPAddress as IP, eventName, errorCode, recipientAccountId, awsRegion | filter ispresent(errorCode) | filter sourceIPAddress not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | stats count(*) as ErrorCount by IP, recipientAccountId, awsRegion | sort ErrorCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 16,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "⚠️ IPs with Network REJECT",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields srcAddr as IP, dstPort, action | filter action = \"REJECT\" | filter srcAddr not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | stats count(*) as RejectCount by IP, dstPort | sort RejectCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 22,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "🔗 Cross-Reference: External IPs in CloudTrail Logs",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields sourceIPAddress as IP, userIdentity.arn, eventName, errorCode, recipientAccountId, awsRegion | filter sourceIPAddress not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | filter sourceIPAddress not like /amazonaws\\.com/ | stats count(*) as APICount, count(errorCode) as ErrorCount by IP, recipientAccountId, awsRegion | sort APICount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 28,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 API Activity Timeline",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp | stats count(*) as Events by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 28,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Network Traffic Timeline",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields @timestamp, action | stats count(*) as FlowCount by bin(10m), action | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 34,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🌐 Network Security — Network Activity Analysis"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 35,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🚫 Top Blocked Network Connections",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields srcAddr, dstAddr, dstPort, protocol, bytes | filter action = \"REJECT\" | stats count(*) as BlockedCount, sum(bytes) as TotalBytes by srcAddr, dstAddr | sort BlockedCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 35,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📊 Top Destination Ports",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields dstPort | filter ispresent(dstPort) | stats count(*) as HitCount by dstPort | sort HitCount desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 41,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📉 Network Traffic Bytes Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields @timestamp, bytes, action | stats sum(bytes) as TotalBytes by bin(10m), action | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 41,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🔍 Top External Source IPs",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields srcAddr, action, bytes | filter srcAddr not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | filter ispresent(srcAddr) | stats count(*) as ConnectionCount, sum(bytes) as TotalBytes by srcAddr, action | sort ConnectionCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 47,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔑 Identity & Access Management"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 48,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🔑 IAM Privilege Escalation Indicators",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, eventSource, userIdentity.arn, sourceIPAddress, recipientAccountId, awsRegion | filter eventSource in [\"iam.amazonaws.com\", \"sts.amazonaws.com\"] | filter eventName in [\"CreateUser\", \"AttachUserPolicy\", \"AttachRolePolicy\", \"PutUserPolicy\", \"PutRolePolicy\", \"CreateAccessKey\", \"CreateLoginProfile\", \"AssumeRole\", \"AssumeRoleWithSAML\", \"AssumeRoleWithWebIdentity\", \"UpdateAssumeRolePolicy\", \"CreateRole\", \"AddUserToGroup\", \"DeactivateMFADevice\", \"DeleteVirtualMFADevice\", \"PutGroupPolicy\"] | stats count(*) as EventCount by eventName, userIdentity.arn, recipientAccountId, awsRegion | sort EventCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 48,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📊 Top API Calls",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields eventName | stats count(*) as CallCount by eventName | sort CallCount desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 54,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🛡️ Authentication Events",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, userIdentity.arn, sourceIPAddress, errorCode, recipientAccountId, awsRegion | filter eventName = \"ConsoleLogin\" | stats count(*) as LoginCount by errorCode, userIdentity.arn, recipientAccountId, awsRegion | sort LoginCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 54,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Authentication Attempts Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, errorCode | filter eventName = \"ConsoleLogin\" | stats count(*) as LoginAttempts by bin(30m), errorCode | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 60,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 📊 Activity Distribution & Analysis"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 61,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🌐 Top Source IPs by Activity Volume",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields sourceIPAddress, eventName, userIdentity.type, recipientAccountId, awsRegion | filter ispresent(sourceIPAddress) | filter sourceIPAddress not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | stats count(*) as ActivityCount by sourceIPAddress, recipientAccountId, awsRegion | sort ActivityCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 61,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🥧 Events by Event Type",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields eventType | stats count(*) as Count by eventType | sort Count desc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 67,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Activity Trend by Event Source",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventSource | filter ispresent(eventSource) | stats count(*) as EventCount by bin(1h), eventSource | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 67,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🌍 Events by Region",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields awsRegion | stats count(*) as EventCount by awsRegion | sort EventCount desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 73,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🥧 Top Services",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields eventSource | stats count(*) as Count by eventSource | sort Count desc | limit 8",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 73,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📊 Read vs Write API Calls",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields readOnly | stats count(*) as CallCount by readOnly | sort CallCount desc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 79,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔍 Detailed Security Events Timeline"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 80,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "🔐 Security Events Timeline — Errors & Access Denied",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, errorCode, errorMessage, userIdentity.arn, sourceIPAddress, recipientAccountId, awsRegion | filter ispresent(errorCode) | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 86,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔒 MFA Monitoring"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 87,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "⚠️ MFA Device Changes (Disable / Delete / Deactivate)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, userIdentity.arn, sourceIPAddress, recipientAccountId, awsRegion\n| filter eventName in [\"DeactivateMFADevice\", \"DeleteVirtualMFADevice\", \"DisableOrganizationsRootSessions\", \"EnableMFADevice\"]\n| stats count(*) as EventCount by eventName, userIdentity.arn, recipientAccountId, awsRegion\n| sort EventCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 87,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 MFA Change Events Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName\n| filter eventName in [\"DeactivateMFADevice\", \"DeleteVirtualMFADevice\", \"EnableMFADevice\", \"CreateVirtualMFADevice\"]\n| stats count(*) as EventCount by bin(1h), eventName\n| sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 93,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 📦 S3 & Data Exfiltration Indicators"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 94,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🚨 S3 Bucket Policy / ACL Changes (Public Exposure Risk)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, userIdentity.arn, requestParameters.bucketName, sourceIPAddress, recipientAccountId, awsRegion\n| filter eventSource = \"s3.amazonaws.com\"\n| filter eventName in [\"PutBucketPolicy\", \"PutBucketAcl\", \"DeleteBucketPolicy\", \"PutBucketPublicAccessBlock\", \"DeleteBucketPublicAccessBlock\"]\n| stats count(*) as EventCount by eventName, requestParameters.bucketName, userIdentity.arn, recipientAccountId, awsRegion\n| sort EventCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 94,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🔄 S3 Replication Configuration Changes",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, userIdentity.arn, requestParameters.bucketName, sourceIPAddress, recipientAccountId, awsRegion\n| filter eventSource = \"s3.amazonaws.com\"\n| filter eventName in [\"PutBucketReplication\", \"DeleteBucketReplication\"]\n| stats count(*) as EventCount by eventName, requestParameters.bucketName, userIdentity.arn, recipientAccountId, awsRegion\n| sort EventCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 100,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "📊 S3 GetObject Spikes from External IPs (Data Events Required)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"data\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, eventName, sourceIPAddress, requestParameters.bucketName, userIdentity.arn, recipientAccountId, awsRegion\n| filter eventSource = \"s3.amazonaws.com\"\n| filter eventName = \"GetObject\"\n| filter sourceIPAddress not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/\n| stats count(*) as GetCount by sourceIPAddress, requestParameters.bucketName, recipientAccountId, awsRegion\n| sort GetCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 106,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 📊 Security Summary Counters"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 107,
+              "width": 8,
+              "height": 4,
+              "properties": {
+                "title": "🔢 Total Distinct Source IPs (Errors)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n filter ispresent(errorCode)\n| stats count_distinct(sourceIPAddress) as DistinctIPs",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8,
+              "y": 107,
+              "width": 8,
+              "height": 4,
+              "properties": {
+                "title": "🔢 Total Error Events",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n filter ispresent(errorCode)\n| stats count(*) as TotalErrors, count_distinct(eventName) as DistinctAPIs, count_distinct(userIdentity.arn) as DistinctIdentities",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16,
+              "y": 107,
+              "width": 8,
+              "height": 4,
+              "properties": {
+                "title": "🔢 Total Distinct External IPs (All Activity)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n filter sourceIPAddress not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/\n| filter sourceIPAddress not like /amazonaws\\.com/\n| stats count_distinct(sourceIPAddress) as DistinctExternalIPs, count(*) as TotalEvents",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            }
+
+          ]
+        }
+  # ----------------------------------------------------------
+  # CloudWatch Dashboard - OCSF Format
+  # ----------------------------------------------------------
+  SecurityDashboardOCSF:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: UseOCSF
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 2,
+              "properties": {
+                "markdown": "# 🔐 CloudWatch Dashboard for CloudTrail & VPC Flow Logs — CloudWatch Unified Data Store (OCSF Format)\n\n**Data Sources:** `aws_cloudtrail` + `amazon_vpc` (auto-discovered via @data_source_name)\n\nThis dashboard uses OCSF (Open Cybersecurity Schema Framework) normalized security event data via CloudWatch Unified Data Store data sources."
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 2,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🚨 Security Overview"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 3,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Security Event Trend Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, status_id, status | filter status_id != 1 | stats count(*) as EventCount by bin(5m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 3,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🚨 Top Failed API Activities (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, status, status_detail, actor.user.name, api.operation, src_endpoint.ip, cloud.account.uid, cloud.region | filter status_id != 1 | filter status in [\"Failure\", \"Error\"] | stats count(*) as FailureCount by status, api.operation, cloud.account.uid, cloud.region | sort FailureCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 9,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "🥧 Activity Types (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields activity_name | stats count(*) as Count by activity_name | sort Count desc | limit 8",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8,
+              "y": 9,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "🥧 Network Actions (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields action | stats count(*) as Count by action",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16,
+              "y": 9,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "title": "🔐 Privileged User Activity (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, actor.user.name, src_endpoint.ip, cloud.account.uid, cloud.region | filter actor.user.type = \"Root\" or actor.user.type = \"Admin\" | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 15,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔗 Correlated Security Insights — API + Network Activity (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 16,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "⚠️ Suspicious IPs: Failed API Activities",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields src_endpoint.ip as IP, api.operation, status, cloud.account.uid, cloud.region | filter status_id != 1 | filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | stats count(*) as FailureCount by IP, cloud.account.uid, cloud.region | sort FailureCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 16,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "⚠️ IPs with Blocked Network Traffic",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields src_endpoint.ip as IP, dst_endpoint.port, action | filter action = \"Denied\" or action = \"Blocked\" | filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | stats count(*) as BlockCount by IP, dst_endpoint.port | sort BlockCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 22,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "🔗 Cross-Reference: External IPs in Both CloudTrail & VPC Logs",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields src_endpoint.ip as IP, actor.user.name, api.operation, status, cloud.account.uid, cloud.region | filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | filter src_endpoint.ip not like /amazonaws\\.com/ | stats count(*) as APICount, count(status_id != 1) as FailureCount by IP, cloud.account.uid, cloud.region | sort APICount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 28,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 API Activity Timeline (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, class_name | stats count(*) as Events by bin(10m), class_name | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 28,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Network Traffic Timeline (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields @timestamp, action | stats count(*) as FlowCount by bin(10m), action | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 34,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🌐 Network Security — Network Activity Analysis (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 35,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🚫 Top Blocked Network Connections",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields src_endpoint.ip, dst_endpoint.ip, dst_endpoint.port, connection_info.protocol_name, traffic.bytes, cloud.account.uid, cloud.region | filter action = \"Denied\" or action = \"Blocked\" | stats count(*) as BlockedCount, sum(traffic.bytes) as TotalBytes by src_endpoint.ip, dst_endpoint.ip, cloud.account.uid, cloud.region | sort BlockedCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 35,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📊 Top Destination Ports (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields dst_endpoint.port | filter ispresent(dst_endpoint.port) | stats count(*) as HitCount by dst_endpoint.port | sort HitCount desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 41,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📉 Network Traffic Bytes Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields @timestamp, traffic.bytes, action | stats sum(traffic.bytes) as TotalBytes by bin(10m), action | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 41,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🔍 Top External Source IPs (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"flow\"] | filterIndex @data_source_name in [\"amazon_vpc\"]|\n fields src_endpoint.ip, action, traffic.bytes | filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | filter ispresent(src_endpoint.ip) | stats count(*) as ConnectionCount, sum(traffic.bytes) as TotalBytes by src_endpoint.ip, action | sort ConnectionCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 47,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔑 Identity & Access Management (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 48,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🔑 Privilege Escalation Indicators (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, api.service.name, actor.user.name, src_endpoint.ip, cloud.account.uid, cloud.region | filter api.service.name in [\"iam.amazonaws.com\", \"sts.amazonaws.com\"] | filter api.operation in [\"CreateUser\", \"AttachUserPolicy\", \"AttachRolePolicy\", \"PutUserPolicy\", \"PutRolePolicy\", \"CreateAccessKey\", \"CreateLoginProfile\", \"AssumeRole\", \"AssumeRoleWithSAML\", \"AssumeRoleWithWebIdentity\", \"UpdateAssumeRolePolicy\", \"CreateRole\", \"AddUserToGroup\", \"DeactivateMFADevice\", \"DeleteVirtualMFADevice\", \"PutGroupPolicy\"] | stats count(*) as EventCount by api.operation, actor.user.name, cloud.account.uid, cloud.region | sort EventCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 48,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📊 Top API Operations (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields api.operation | stats count(*) as CallCount by api.operation | sort CallCount desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 54,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🛡️ Authentication Events (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, actor.user.name, src_endpoint.ip, status, cloud.account.uid, cloud.region | filter class_name = \"Authentication\" or api.operation = \"ConsoleLogin\" | stats count(*) as LoginCount by status, actor.user.name, cloud.account.uid, cloud.region | sort LoginCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 54,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Authentication Attempts Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, status | filter class_name = \"Authentication\" or api.operation = \"ConsoleLogin\" | stats count(*) as LoginAttempts by bin(30m), status | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 60,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 📊 Activity Distribution & Severity Analysis (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 61,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🌐 Top Source IPs by Activity Volume (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields src_endpoint.ip, api.operation, actor.user.type, cloud.account.uid, cloud.region | filter ispresent(src_endpoint.ip) | filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/ | stats count(*) as ActivityCount by src_endpoint.ip, cloud.account.uid, cloud.region | sort ActivityCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 61,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🥧 Events by Severity (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields severity | stats count(*) as Count by severity | sort Count desc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 67,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 Activity Trend by Class (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, class_name | filter ispresent(class_name) | stats count(*) as EventCount by bin(1h), class_name | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 67,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🌍 Events by Region (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields cloud.region | stats count(*) as EventCount by cloud.region | sort EventCount desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 73,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🥧 Top Services (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields api.service.name | stats count(*) as Count by api.service.name | sort Count desc | limit 8",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 73,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📊 Status Distribution (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields status | filter ispresent(status) | stats count(*) as StatusCount by status | sort StatusCount desc | limit 12",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 79,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔍 Detailed Security Events Timeline (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 80,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "🔐 Security Events Timeline — Failed Activities & Anomalies (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, status, status_detail, actor.user.name, src_endpoint.ip, cloud.account.uid, cloud.region | filter status_id != 1 | filter status in [\"Failure\", \"Error\"] | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 86,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 🔒 MFA Monitoring (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 87,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "⚠️ MFA Device Changes (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, actor.user.name, src_endpoint.ip, cloud.account.uid, cloud.region\n| filter api.operation in [\"DeactivateMFADevice\", \"DeleteVirtualMFADevice\", \"DisableOrganizationsRootSessions\", \"EnableMFADevice\"]\n| stats count(*) as EventCount by api.operation, actor.user.name, cloud.account.uid, cloud.region\n| sort EventCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 87,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "📈 MFA Change Events Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation\n| filter api.operation in [\"DeactivateMFADevice\", \"DeleteVirtualMFADevice\", \"EnableMFADevice\", \"CreateVirtualMFADevice\"]\n| stats count(*) as EventCount by bin(1h), api.operation\n| sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 93,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 📦 S3 & Data Exfiltration Indicators (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 94,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🚨 S3 Bucket Policy / ACL Changes (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, actor.user.name, src_endpoint.ip, cloud.account.uid, cloud.region\n| filter api.service.name = \"s3.amazonaws.com\"\n| filter api.operation in [\"PutBucketPolicy\", \"PutBucketAcl\", \"DeleteBucketPolicy\", \"PutBucketPublicAccessBlock\", \"DeleteBucketPublicAccessBlock\"]\n| stats count(*) as EventCount by api.operation, actor.user.name, cloud.account.uid, cloud.region\n| sort EventCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12,
+              "y": 94,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "🔄 S3 Replication Configuration Changes (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, actor.user.name, src_endpoint.ip, cloud.account.uid, cloud.region\n| filter api.service.name = \"s3.amazonaws.com\"\n| filter api.operation in [\"PutBucketReplication\", \"DeleteBucketReplication\"]\n| stats count(*) as EventCount by api.operation, actor.user.name, cloud.account.uid, cloud.region\n| sort EventCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 100,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "📊 S3 GetObject Spikes from External IPs (Data Events Required) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"data\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n fields @timestamp, api.operation, src_endpoint.ip, actor.user.name, cloud.account.uid, cloud.region\n| filter api.service.name = \"s3.amazonaws.com\"\n| filter api.operation = \"GetObject\"\n| filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/\n| stats count(*) as GetCount by src_endpoint.ip, cloud.account.uid, cloud.region\n| sort GetCount desc\n| limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0,
+              "y": 106,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "## 📊 Security Summary Counters (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0,
+              "y": 107,
+              "width": 8,
+              "height": 4,
+              "properties": {
+                "title": "🔢 Total Distinct Source IPs (Failures)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n filter status_id != 1\n| stats count_distinct(src_endpoint.ip) as DistinctIPs",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8,
+              "y": 107,
+              "width": 8,
+              "height": 4,
+              "properties": {
+                "title": "🔢 Total Failed Events",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n filter status_id != 1\n| stats count(*) as TotalFailures, count_distinct(api.operation) as DistinctAPIs, count_distinct(actor.user.name) as DistinctIdentities",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16,
+              "y": 107,
+              "width": 8,
+              "height": 4,
+              "properties": {
+                "title": "🔢 Total Distinct External IPs (All Activity)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"management\"] | filterIndex @data_source_name in [\"aws_cloudtrail\"]|\n filter src_endpoint.ip not like /^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)/\n| filter src_endpoint.ip not like /amazonaws\\.com/\n| stats count_distinct(src_endpoint.ip) as DistinctExternalIPs, count(*) as TotalEvents",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            }
+
+          ]
+        }
+
+
+
+
