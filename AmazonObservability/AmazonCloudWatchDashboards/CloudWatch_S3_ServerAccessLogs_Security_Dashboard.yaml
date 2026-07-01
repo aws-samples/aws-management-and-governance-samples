@@ -1,0 +1,1349 @@
+# MIT No Attribution
+# 
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of
+# this software and associated documentation files (the "Software"), to deal in
+# the Software without restriction, including without limitation the rights to
+# use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+# the Software, and to permit persons to whom the Software is furnished to do so.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+# FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+# IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Sample Amazon CloudWatch Dashboard for Amazon S3 Server Access Logs — Security, Compliance & Audit using Amazon CloudWatch data sources with unified data and telemetry.
+  Supports Standard AWS and OCSF log formats. Provides security visibility into Amazon S3 data-plane
+  activity. Queries use SOURCE logGroups() with filterIndex @data_source_type and filterIndex @data_source_name.
+  No dependency on custom log group names. READ-ONLY dashboard. Enable stack termination protection post-deployment.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Dashboard Configuration"
+        Parameters:
+          - DashboardName
+          - LogFormat
+    ParameterLabels:
+      DashboardName:
+        default: "Dashboard Name"
+      LogFormat:
+        default: "Log Format (Standard or OCSF)"
+
+# ============================================================
+# PARAMETERS
+# ============================================================
+Parameters:
+
+  DashboardName:
+    Type: String
+    Default: Amazon-S3-Server-AccessLog-Security-Dashboard
+    Description: Name for the CloudWatch Dashboard.
+    AllowedPattern: '[A-Za-z0-9_-]+'
+    ConstraintDescription: Only alphanumeric characters, hyphens, and underscores allowed.
+    MaxLength: 255
+    MinLength: 1
+
+  LogFormat:
+    Type: String
+    Default: Standard
+    AllowedValues: [Standard, OCSF]
+    Description: >
+      Choose log format: Standard (native Amazon S3 Server Access Logs) or OCSF (Open Cybersecurity Schema Framework).
+      OCSF provides normalized security event data across different sources.
+
+# ============================================================
+# CONDITIONS
+# ============================================================
+Conditions:
+  UseOCSF: !Equals [!Ref LogFormat, OCSF]
+  UseStandard: !Not [!Equals [!Ref LogFormat, OCSF]]
+
+# ============================================================
+# RESOURCES
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # CloudWatch Dashboard - Standard Format
+  # ----------------------------------------------------------
+  S3AccessLogSecurityDashboardStandard:
+    Type: AWS::CloudWatch::Dashboard
+    Metadata:
+      Description: "CloudWatch Dashboard for Amazon S3 Server Access Logs security monitoring using Standard AWS log format"
+    Condition: UseStandard
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": {
+                "markdown": "# 🪣 Amazon S3 Server Access Logs — Security, Compliance & Audit Dashboard (Standard Format)\n\n**Data Source:** `amazon_s3 / server_access` &nbsp; | &nbsp; **Region:** `${AWS::Region}`\n\nThis dashboard provides security visibility into Amazon S3 data-plane activity using Amazon S3 Server Access Logs in standard AWS format via CloudWatch Unified Data Store data sources."
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 2, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📊 Security Summary Counters"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "🔢 Total Requests",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | fields @timestamp | stats count(*) as TotalRequests",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 6, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "🚫 Total Errors (4xx + 5xx)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status >= 400 | stats count(*) as TotalErrors, count_distinct(remote_ip) as DistinctIPs, count_distinct(bucket_name) as BucketsAffected",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "🔓 Anonymous Requests",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter authentication_type = \"-\" | filter operation not like /OPTIONS/ | stats count(*) as AnonymousRequests, count_distinct(remote_ip) as DistinctIPs",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 18, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "📦 Data Downloaded (MB)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /REST\\.GET\\.OBJECT/ and http_status = 200 | stats sum(bytes_sent_size) / 1048576 as TotalMB_Downloaded, count(*) as GetRequests",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 7, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔍 Security Overview"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 8, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Error Rate Trend Over Time (4xx + 5xx)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status >= 400 | stats count(*) as ErrorCount by bin(5m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 8, "width": 12, "height": 6,
+              "properties": {
+                "title": "📋 Top Error Codes (AccessDenied, NoSuchKey, etc.)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status >= 400 | stats count(*) as ErrorCount by error_code, http_status, operation | sort ErrorCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 14, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Operations Distribution",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Count by operation | sort Count desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8, "y": 14, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 HTTP Status Code Distribution",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Count by http_status | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16, "y": 14, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Request Volume by Bucket",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Count by bucket_name | sort Count desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 20, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔒 Access Denied & Unauthorized Access"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 21, "width": 12, "height": 6,
+              "properties": {
+                "title": "⚠️ Top IPs with Access Denied (403)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status = 403 | stats count(*) as DeniedCount, count_distinct(key_name) as UniqueKeys, count_distinct(bucket_name) as Buckets by remote_ip, error_code | sort DeniedCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 21, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔍 Top Requesters with 403 Errors",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status = 403 | stats count(*) as DeniedCount, count_distinct(bucket_name) as Buckets by requester, operation | sort DeniedCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 27, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Access Denied Trend Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status = 403 | stats count(*) as DeniedCount by bin(5m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 27, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔓 Anonymous / Unauthenticated Requests",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter authentication_type = \"-\" | filter operation not like /OPTIONS/ | fields @timestamp, bucket_name, operation, key_name, remote_ip, http_status, bytes_sent_size, user_agent | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 33, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📦 Data Exfiltration Indicators"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 34, "width": 12, "height": 6,
+              "properties": {
+                "title": "📦 Top Downloaders by Volume (MB)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /REST\\.GET\\.OBJECT/ and http_status = 200 | stats sum(bytes_sent_size) / 1048576 as MB_Downloaded, count(*) as Requests, count_distinct(key_name) as UniqueObjects, count_distinct(bucket_name) as Buckets by remote_ip, requester | sort MB_Downloaded desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 34, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Download Volume Trend Over Time (MB)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /REST\\.GET\\.OBJECT/ and http_status = 200 | stats sum(bytes_sent_size) / 1048576 as MB_Downloaded by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 40, "width": 24, "height": 6,
+              "properties": {
+                "title": "🌐 External IP Downloads (Non-RFC1918)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /REST\\.GET\\.OBJECT/ and http_status = 200 | filter remote_ip not like /^10\\./ | filter remote_ip not like /^172\\.(1[6-9]|2[0-9]|3[01])\\./ | filter remote_ip not like /^192\\.168\\./ | filter remote_ip not like /^127\\./ | filter remote_ip not like /^169\\.254\\./ | filter remote_ip not like /^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\./ | stats sum(bytes_sent_size) / 1048576 as MB_Downloaded, count(*) as Requests, count_distinct(bucket_name) as Buckets by remote_ip, requester | sort MB_Downloaded desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 46, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🗑️ Delete & Bulk Delete Monitoring"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 47, "width": 12, "height": 6,
+              "properties": {
+                "title": "🗑️ Bulk Delete Activity by Requester",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /DELETE/ or operation = \"REST.POST.MULTI_OBJECT_DELETE\" or operation = \"BATCH.DELETE.OBJECT\" | stats count(*) as DeleteCount, count_distinct(key_name) as UniqueObjects, count_distinct(bucket_name) as Buckets by requester, remote_ip, operation | sort DeleteCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 47, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Delete Operations Trend Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /DELETE/ or operation = \"REST.POST.MULTI_OBJECT_DELETE\" or operation = \"BATCH.DELETE.OBJECT\" | stats count(*) as DeleteCount by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 53, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🌍 Source Region & IP Analysis"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 54, "width": 12, "height": 6,
+              "properties": {
+                "title": "🌐 Requests by Source Region",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter source_region != \"-\" | stats count(*) as RequestCount, count_distinct(remote_ip) as UniqueIPs by source_region | sort RequestCount desc | limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 54, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔍 Top Source IPs by Request Volume",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as RequestCount, sum(bytes_sent_size) / 1048576 as MB_Sent, count_distinct(bucket_name) as Buckets by remote_ip | sort RequestCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 60, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔐 TLS & Encryption Compliance"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 61, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 TLS Version Distribution",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter tls_version != \"-\" | stats count(*) as Count by tls_version | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8, "y": 61, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Cipher Suite Distribution",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter cipher_suite != \"-\" | stats count(*) as Count by cipher_suite | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16, "y": 61, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Signature Version Distribution",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter signature_version != \"-\" | stats count(*) as Count by signature_version | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 67, "width": 12, "height": 6,
+              "properties": {
+                "title": "⚠️ Outdated TLS (1.0 / 1.1) — Clients to Upgrade",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter tls_version in [\"TLSv1\", \"TLSv1.1\"] | stats count(*) as OutdatedTLS by tls_version, cipher_suite, remote_ip, requester, user_agent, bucket_name | sort OutdatedTLS desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 67, "width": 12, "height": 6,
+              "properties": {
+                "title": "⚠️ Deprecated Signature Version (SigV2)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter signature_version = \"SigV2\" | stats count(*) as SigV2Count by requester, remote_ip, user_agent, bucket_name, operation | sort SigV2Count desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 73, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## ♻️ Lifecycle & Retention Compliance"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 74, "width": 12, "height": 6,
+              "properties": {
+                "title": "📊 S3 Lifecycle Operations by Type",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /^S3\\./ | stats count(*) as EventCount by operation, bucket_name | sort EventCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 74, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Lifecycle Operations Trend Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter operation like /^S3\\./ | stats count(*) as EventCount by bin(1h), operation | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 80, "width": 12, "height": 6,
+              "properties": {
+                "title": "✅ ACL-Required Requests (Legacy Access)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter acl_required = 1 | stats count(*) as ACLCount by bucket_name, operation, requester | sort ACLCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 80, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔗 Access Point Usage",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter access_point_arn != \"-\" | stats count(*) as RequestCount, count_distinct(requester) as UniqueRequesters by access_point_arn, bucket_name, operation | sort RequestCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 86, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📋 Audit — Activity Patterns & User Agents"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 87, "width": 12, "height": 6,
+              "properties": {
+                "title": "👤 Top Requesters by Activity Volume",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as TotalRequests, sum(bytes_sent_size) / 1073741824 as GB_Sent, count_distinct(bucket_name) as Buckets, count_distinct(operation) as UniqueOps by requester | sort TotalRequests desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 87, "width": 12, "height": 6,
+              "properties": {
+                "title": "🖥️ User Agents per Bucket",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as RequestCount, count_distinct(requester) as UniqueRequesters by bucket_name, user_agent | sort RequestCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 93, "width": 12, "height": 6,
+              "properties": {
+                "title": "📊 Operations per Bucket",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as RequestCount by bucket_name, operation | sort RequestCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 93, "width": 12, "height": 6,
+              "properties": {
+                "title": "⏱️ Slowest Requests (by Total Duration ms)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | fields @timestamp, bucket_name, operation, key_name, total_duration, turn_around_duration, object_size, remote_ip, requester, http_status | sort total_duration desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 99, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📈 Activity Timelines"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 100, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Request Volume Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Requests by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 100, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 5xx Server Errors Over Time",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status >= 500 | stats count(*) as ServerErrors by bin(5m), error_code | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 106, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔍 Detailed Security Events"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 107, "width": 24, "height": 6,
+              "properties": {
+                "title": "🔐 Recent Access Denied Events (Full Detail)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status = 403 | fields @timestamp, bucket_name, operation, key_name, remote_ip, requester, error_code, user_agent, source_region, tls_version | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 113, "width": 24, "height": 6,
+              "properties": {
+                "title": "🔍 Recent 5xx Server Errors (Full Detail)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_status >= 500 | fields @timestamp, bucket_name, operation, key_name, remote_ip, requester, error_code, http_status, total_duration | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            }
+
+          ]
+        }
+
+  # ----------------------------------------------------------
+  # CloudWatch Dashboard - OCSF Format
+  # ----------------------------------------------------------
+  S3AccessLogSecurityDashboardOCSF:
+    Type: AWS::CloudWatch::Dashboard
+    Metadata:
+      Description: "CloudWatch Dashboard for Amazon S3 Server Access Logs security monitoring using OCSF log format"
+    Condition: UseOCSF
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": {
+                "markdown": "# 🪣 Amazon S3 Server Access Logs — Security, Compliance & Audit Dashboard (OCSF Format)\n\n**Data Source:** `amazon_s3 / server_access` &nbsp; | &nbsp; **Region:** `${AWS::Region}`\n\nThis dashboard provides security visibility into Amazon S3 data-plane activity using Amazon S3 Server Access Logs in OCSF (Open Cybersecurity Schema Framework) normalized format via CloudWatch Unified Data Store data sources."
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 2, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📊 Security Summary Counters (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "🔢 Total Requests",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | fields @timestamp | stats count(*) as TotalRequests",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 6, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "🚫 Total Errors (4xx + 5xx)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code >= 400 | stats count(*) as TotalErrors, count_distinct(src_endpoint.ip) as DistinctIPs, count_distinct(unmapped.bucket_name) as BucketsAffected",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "🔓 Anonymous Requests",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter actor.user.type = \"Unknown\" or actor.user.name = \"-\" | filter api.operation not like /OPTIONS/ | stats count(*) as AnonymousRequests, count_distinct(src_endpoint.ip) as DistinctIPs",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 18, "y": 3, "width": 6, "height": 4,
+              "properties": {
+                "title": "📦 Data Downloaded (MB)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /REST\\.GET\\.OBJECT/ and http_response.code = 200 | stats sum(traffic.bytes) / 1048576 as TotalMB_Downloaded, count(*) as GetRequests",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 7, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔍 Security Overview (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 8, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Error Rate Trend Over Time (4xx + 5xx)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code >= 400 | stats count(*) as ErrorCount by bin(5m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 8, "width": 12, "height": 6,
+              "properties": {
+                "title": "📋 Top Error Codes (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code >= 400 | stats count(*) as ErrorCount by status_detail, http_response.code, api.operation | sort ErrorCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 14, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Operations Distribution (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Count by api.operation | sort Count desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8, "y": 14, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 HTTP Status Code Distribution (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Count by http_response.code | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16, "y": 14, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Request Volume by Bucket (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Count by unmapped.bucket_name | sort Count desc | limit 10",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 20, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔒 Access Denied & Unauthorized Access (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 21, "width": 12, "height": 6,
+              "properties": {
+                "title": "⚠️ Top IPs with Access Denied (403)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code = 403 | stats count(*) as DeniedCount, count_distinct(unmapped.key_name) as UniqueKeys, count_distinct(unmapped.bucket_name) as Buckets by src_endpoint.ip, status_detail | sort DeniedCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 21, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔍 Top Requesters with 403 Errors (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code = 403 | stats count(*) as DeniedCount, count_distinct(unmapped.bucket_name) as Buckets by actor.user.name, api.operation | sort DeniedCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 27, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Access Denied Trend Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code = 403 | stats count(*) as DeniedCount by bin(5m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 27, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔓 Anonymous / Unauthenticated Requests (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter actor.user.type = \"Unknown\" or actor.user.name = \"-\" | filter api.operation not like /OPTIONS/ | fields @timestamp, unmapped.bucket_name, api.operation, unmapped.key_name, src_endpoint.ip, http_response.code, traffic.bytes, http_request.user_agent | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 33, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📦 Data Exfiltration Indicators (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 34, "width": 12, "height": 6,
+              "properties": {
+                "title": "📦 Top Downloaders by Volume (MB)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /REST\\.GET\\.OBJECT/ and http_response.code = 200 | stats sum(traffic.bytes) / 1048576 as MB_Downloaded, count(*) as Requests, count_distinct(unmapped.key_name) as UniqueObjects, count_distinct(unmapped.bucket_name) as Buckets by src_endpoint.ip, actor.user.name | sort MB_Downloaded desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 34, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Download Volume Trend Over Time (MB)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /REST\\.GET\\.OBJECT/ and http_response.code = 200 | stats sum(traffic.bytes) / 1048576 as MB_Downloaded by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 40, "width": 24, "height": 6,
+              "properties": {
+                "title": "🌐 External IP Downloads (Non-RFC1918) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /REST\\.GET\\.OBJECT/ and http_response.code = 200 | filter src_endpoint.ip not like /^10\\./ | filter src_endpoint.ip not like /^172\\.(1[6-9]|2[0-9]|3[01])\\./ | filter src_endpoint.ip not like /^192\\.168\\./ | filter src_endpoint.ip not like /^127\\./ | filter src_endpoint.ip not like /^169\\.254\\./ | filter src_endpoint.ip not like /^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\./ | stats sum(traffic.bytes) / 1048576 as MB_Downloaded, count(*) as Requests, count_distinct(unmapped.bucket_name) as Buckets by src_endpoint.ip, actor.user.name | sort MB_Downloaded desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 46, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🗑️ Delete & Bulk Delete Monitoring (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 47, "width": 12, "height": 6,
+              "properties": {
+                "title": "🗑️ Bulk Delete Activity by Requester (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /DELETE/ or api.operation = \"REST.POST.MULTI_OBJECT_DELETE\" or api.operation = \"BATCH.DELETE.OBJECT\" | stats count(*) as DeleteCount, count_distinct(unmapped.key_name) as UniqueObjects, count_distinct(unmapped.bucket_name) as Buckets by actor.user.name, src_endpoint.ip, api.operation | sort DeleteCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 47, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Delete Operations Trend Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /DELETE/ or api.operation = \"REST.POST.MULTI_OBJECT_DELETE\" or api.operation = \"BATCH.DELETE.OBJECT\" | stats count(*) as DeleteCount by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 53, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🌍 Source Region & IP Analysis (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 54, "width": 12, "height": 6,
+              "properties": {
+                "title": "🌐 Requests by Source Region (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter cloud.region != \"-\" | stats count(*) as RequestCount, count_distinct(src_endpoint.ip) as UniqueIPs by cloud.region | sort RequestCount desc | limit 20",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "bar",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 54, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔍 Top Source IPs by Request Volume (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as RequestCount, sum(traffic.bytes) / 1048576 as MB_Sent, count_distinct(unmapped.bucket_name) as Buckets by src_endpoint.ip | sort RequestCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 60, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔐 TLS & Encryption Compliance (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 61, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 TLS Version Distribution (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter tls.version != \"-\" | stats count(*) as Count by tls.version | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 8, "y": 61, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Cipher Suite Distribution (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter tls.cipher != \"-\" | stats count(*) as Count by tls.cipher | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 16, "y": 61, "width": 8, "height": 6,
+              "properties": {
+                "title": "🥧 Signature Version Distribution (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter unmapped.signature_version != \"-\" | stats count(*) as Count by unmapped.signature_version | sort Count desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "pie",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 67, "width": 12, "height": 6,
+              "properties": {
+                "title": "⚠️ Outdated TLS (1.0 / 1.1) — Clients to Upgrade (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter tls.version in [\"TLSv1\", \"TLSv1.1\"] | stats count(*) as OutdatedTLS by tls.version, tls.cipher, src_endpoint.ip, actor.user.name, http_request.user_agent, unmapped.bucket_name | sort OutdatedTLS desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 67, "width": 12, "height": 6,
+              "properties": {
+                "title": "⚠️ Deprecated Signature Version (SigV2) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter unmapped.signature_version = \"SigV2\" | stats count(*) as SigV2Count by actor.user.name, src_endpoint.ip, http_request.user_agent, unmapped.bucket_name, api.operation | sort SigV2Count desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 73, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## ♻️ Lifecycle & Retention Compliance (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 74, "width": 12, "height": 6,
+              "properties": {
+                "title": "📊 S3 Lifecycle Operations by Type (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /^S3\\./ | stats count(*) as EventCount by api.operation, unmapped.bucket_name | sort EventCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 74, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Lifecycle Operations Trend Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter api.operation like /^S3\\./ | stats count(*) as EventCount by bin(1h), api.operation | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 80, "width": 12, "height": 6,
+              "properties": {
+                "title": "✅ ACL-Required Requests (Legacy Access) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter unmapped.acl_required = 1 | stats count(*) as ACLCount by unmapped.bucket_name, api.operation, actor.user.name | sort ACLCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 80, "width": 12, "height": 6,
+              "properties": {
+                "title": "🔗 Access Point Usage (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter unmapped.access_point_arn != \"-\" | stats count(*) as RequestCount, count_distinct(actor.user.name) as UniqueRequesters by unmapped.access_point_arn, unmapped.bucket_name, api.operation | sort RequestCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 86, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📋 Audit — Activity Patterns & User Agents (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 87, "width": 12, "height": 6,
+              "properties": {
+                "title": "👤 Top Requesters by Activity Volume (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as TotalRequests, sum(traffic.bytes) / 1073741824 as GB_Sent, count_distinct(unmapped.bucket_name) as Buckets, count_distinct(api.operation) as UniqueOps by actor.user.name | sort TotalRequests desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 87, "width": 12, "height": 6,
+              "properties": {
+                "title": "🖥️ User Agents per Bucket (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as RequestCount, count_distinct(actor.user.name) as UniqueRequesters by unmapped.bucket_name, http_request.user_agent | sort RequestCount desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 93, "width": 12, "height": 6,
+              "properties": {
+                "title": "📊 Operations per Bucket (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as RequestCount by unmapped.bucket_name, api.operation | sort RequestCount desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 93, "width": 12, "height": 6,
+              "properties": {
+                "title": "⏱️ Slowest Requests (by Total Duration ms) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | fields @timestamp, unmapped.bucket_name, api.operation, unmapped.key_name, duration, unmapped.turn_around_duration, unmapped.object_size, src_endpoint.ip, actor.user.name, http_response.code | sort duration desc | limit 25",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 99, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 📈 Activity Timelines (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 100, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 Request Volume Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | stats count(*) as Requests by bin(10m) | sort @timestamp asc",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 12, "y": 100, "width": 12, "height": 6,
+              "properties": {
+                "title": "📈 5xx Server Errors Over Time (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code >= 500 | stats count(*) as ServerErrors by bin(5m), status_detail | sort @timestamp asc | limit 200",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": true
+              }
+            },
+
+            {
+              "type": "text",
+              "x": 0, "y": 106, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "## 🔍 Detailed Security Events (OCSF)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 107, "width": 24, "height": 6,
+              "properties": {
+                "title": "🔐 Recent Access Denied Events (Full Detail) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code = 403 | fields @timestamp, unmapped.bucket_name, api.operation, unmapped.key_name, src_endpoint.ip, actor.user.name, status_detail, http_request.user_agent, cloud.region, tls.version | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 113, "width": 24, "height": 6,
+              "properties": {
+                "title": "🔍 Recent 5xx Server Errors (Full Detail) (OCSF)",
+                "query": "SOURCE logGroups() | filterIndex @data_source_type in [\"server_access\"] | filterIndex @data_source_name in [\"amazon_s3\"] | filter http_response.code >= 500 | fields @timestamp, unmapped.bucket_name, api.operation, unmapped.key_name, src_endpoint.ip, actor.user.name, status_detail, http_response.code, duration | sort @timestamp desc | limit 50",
+                "queryBy": "logGroupName",
+                "logGroupPrefixes": {"logClass": "STANDARD", "logGroupPrefix": [], "accountIds": ["All"]},
+                "region": "${AWS::Region}",
+                "view": "table",
+                "stacked": false
+              }
+            }
+
+          ]
+        }
+# ============================================================
+# OUTPUTS
+# ============================================================
+Outputs:
+
+  DashboardName:
+    Description: Name of the CloudWatch Dashboard.
+    Value: !Ref DashboardName
+
+  DashboardURL:
+    Description: Direct URL to the CloudWatch Dashboard.
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${DashboardName}"
