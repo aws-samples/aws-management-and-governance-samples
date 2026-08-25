@@ -1,0 +1,760 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Amazon CloudWatch dashboard for Application Load Balancer vended logs
+  (access, connection, and health check) delivered to CloudWatch Logs, plus
+  optional metric filters and Contributor Insights rules that back several
+  widgets. The log widgets use SOURCE logGroups() with filterIndex
+  @data_source_name and filterIndex @data_source_type, so they find ALB logs in
+  any log group in the account and Region without being told its name. The VPC
+  Flow Logs correlation row is optional and is deployed only when you supply a
+  flow log group and a load balancer node IP.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Dashboard
+        Parameters:
+          - DashboardName
+          - ResourcePrefix
+      - Label:
+          default: Metric filters and Contributor Insights
+        Parameters:
+          - ALBLogGroupName
+      - Label:
+          default: VPC Flow Logs correlation (optional)
+        Parameters:
+          - VPCFlowLogsLogGroupName
+          - LoadBalancerNodeIp1
+          - LoadBalancerNodeIp2
+          - TargetPort
+      - Label:
+          default: Continuous monitoring
+        Parameters:
+          - CreateMonitoringResources
+          - MetricNamespace
+
+Parameters:
+  DashboardName:
+    Type: String
+    Default: ALB-Insights
+    Description: Name of the CloudWatch dashboard to create.
+    AllowedPattern: '^[A-Za-z0-9_-]+$'
+
+  ResourcePrefix:
+    Type: String
+    Default: ALB
+    Description: >
+      Prefix for the Contributor Insights rule names and metric filter names this
+      stack creates. Change it if you deploy the stack more than once per Region.
+    AllowedPattern: '^[A-Za-z0-9-]+$'
+
+  ALBLogGroupName:
+    Type: String
+    Default: /aws/elb
+    Description: >
+      Log group receiving ALB access, connection, and health check logs. The
+      dashboard log widgets do not use this value; they locate ALB logs by data
+      source index across every log group in the Region. It is required only by
+      the metric filters and Contributor Insights rules, which must name a
+      concrete log group.
+
+  VPCFlowLogsLogGroupName:
+    Type: String
+    Default: ''
+    Description: >
+      Log group receiving VPC Flow Logs for the VPC containing your load balancer
+      and targets. Used only by the correlation row at the bottom of the dashboard.
+      Leave empty, the default, and that row is not created at all: the dashboard
+      deploys with rows 1 through 6 only and no flow log permissions are needed.
+      Supply it together with LoadBalancerNodeIp1 to add the row.
+
+  LoadBalancerNodeIp1:
+    Type: String
+    Default: ''
+    Description: >
+      Private IP of a load balancer node elastic network interface. Required, along
+      with VPCFlowLogsLogGroupName, to create the correlation row. Find these with
+      "aws ec2 describe-network-interfaces --filters
+      Name=description,Values='ELB app/<lb-name>/*'". ALB logs never record which
+      node served a request, so the correlation queries scope srcaddr to these IPs.
+      Leave empty to deploy without the correlation row.
+
+  LoadBalancerNodeIp2:
+    Type: String
+    Default: ''
+    Description: >
+      Private IP of a second load balancer node elastic network interface. Optional.
+      For a load balancer in more than two Availability Zones, add the remaining IPs
+      to the "srcaddr in [...]" list in the correlation widgets after deployment.
+      Ignored when the correlation row is not created.
+
+  TargetPort:
+    Type: String
+    Default: '8080'
+    Description: >
+      Port your targets listen on. Used to scope the correlation queries to the
+      load-balancer-to-target path. Ignored when the correlation row is not
+      created.
+
+  CreateMonitoringResources:
+    Type: String
+    Default: 'Yes'
+    AllowedValues: ['Yes', 'No']
+    Description: >
+      Create the metric filters and Contributor Insights rules that back four of
+      the dashboard widgets. Contributor Insights rules are charged per rule per
+      month plus per million matched events. Choose No to deploy only the
+      dashboard; those widgets will show no data.
+
+  MetricNamespace:
+    Type: String
+    Default: ALB/VendedLogs
+    Description: CloudWatch namespace for the metrics the metric filters publish.
+
+Conditions:
+  EnableMonitoring: !Equals [!Ref CreateMonitoringResources, 'Yes']
+
+  # The correlation row renders only when both the flow log group and at least one
+  # load balancer node IP are supplied. Without the node IP the queries would return
+  # every flow to the target port, including internet scans of the load balancer.
+  EnableCorrelation: !And
+    - !Not [!Equals [!Ref VPCFlowLogsLogGroupName, '']]
+    - !Not [!Equals [!Ref LoadBalancerNodeIp1, '']]
+
+Resources:
+  ALBDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub
+        - |
+          {
+            "start": "-P7D",
+            "periodOverride": "auto",
+            "widgets": [
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 0,
+                "width": 4,
+                "height": 4,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SUM(SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"RequestCount\"', 'Sum'))",
+                        "label": "Requests",
+                        "id": "k0"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Requests",
+                  "view": "singleValue",
+                  "setPeriodToTimeRange": true,
+                  "sparkline": false,
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 4,
+                "y": 0,
+                "width": 4,
+                "height": 4,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SUM(SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HTTPCode_ELB_5XX_Count\"', 'Sum'))",
+                        "label": "ELB 5xx",
+                        "id": "k1"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "ELB 5xx",
+                  "view": "singleValue",
+                  "setPeriodToTimeRange": true,
+                  "sparkline": false,
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 0,
+                "width": 4,
+                "height": 4,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SUM(SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HTTPCode_Target_4XX_Count\"', 'Sum'))",
+                        "label": "Target 4xx",
+                        "id": "k2"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Target 4xx",
+                  "view": "singleValue",
+                  "setPeriodToTimeRange": true,
+                  "sparkline": false,
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 0,
+                "width": 4,
+                "height": 4,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SUM(SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"TargetConnectionErrorCount\"', 'Sum'))",
+                        "label": "Target connection errors",
+                        "id": "k3"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Target connection errors",
+                  "view": "singleValue",
+                  "setPeriodToTimeRange": true,
+                  "sparkline": false,
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 0,
+                "width": 4,
+                "height": 4,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "MAX(SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"TargetResponseTime\"', 'p99'))",
+                        "label": "Worst target p99 (s)",
+                        "id": "k4"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Worst target p99 (s)",
+                  "view": "singleValue",
+                  "setPeriodToTimeRange": true,
+                  "sparkline": false,
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 20,
+                "y": 0,
+                "width": 4,
+                "height": 4,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "MAX(SEARCH('{AWS/ApplicationELB,LoadBalancer,TargetGroup} MetricName=\"UnHealthyHostCount\"', 'Maximum'))",
+                        "label": "Unhealthy hosts (max)",
+                        "id": "k5"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Unhealthy hosts (max)",
+                  "view": "singleValue",
+                  "setPeriodToTimeRange": true,
+                  "sparkline": false,
+                  "period": 300
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 4,
+                "width": 12,
+                "height": 10,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"RequestCount\"', 'Sum')",
+                        "label": "",
+                        "id": "e1"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Traffic by load balancer",
+                  "view": "timeSeries",
+                  "stacked": true,
+                  "period": 300,
+                  "yAxis": {
+                    "left": {
+                      "label": "requests",
+                      "showUnits": false
+                    }
+                  }
+                }
+              },
+              {
+                "type": "log",
+                "x": 12,
+                "y": 4,
+                "width": 12,
+                "height": 7,
+                "properties": {
+                  "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\"]\n| fields concat(substr(elb_status_code,0,1),\"xx\") as class\n| stats count(*) as requests by class\n| sort class asc",
+                  "region": "${AWS::Region}",
+                  "stacked": false,
+                  "view": "pie",
+                  "title": "Status class distribution"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 14,
+                "width": 12,
+                "height": 7,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"TargetResponseTime\"', 'p99')",
+                        "id": "e3",
+                        "label": ""
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Target response time p99 by load balancer",
+                  "view": "timeSeries",
+                  "stacked": false,
+                  "period": 300,
+                  "yAxis": {
+                    "left": {
+                      "label": "seconds",
+                      "showUnits": false
+                    }
+                  }
+                }
+              },
+              {
+                "type": "log",
+                "x": 12,
+                "y": 11,
+                "width": 12,
+                "height": 10,
+                "properties": {
+                  "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\",\"health_check\"]\n| stats sum(elb_status_code >= 500) as lb_5xx, sum(status = \"FAIL\") as health_check_failures by bin(30m)",
+                  "region": "${AWS::Region}",
+                  "title": "Health check failures and load balancer 5xx over time",
+                  "view": "timeSeries"
+                }
+              },
+              {
+                "type": "log",
+                "x": 0,
+                "y": 21,
+                "width": 12,
+                "height": 5,
+                "properties": {
+                  "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\"]\n| filter elb_status_code >= 500\n| parse elb /^app\\/(?<lb>[^\\/]+)/\n| fields if(target_status_code = \"-\", \"load balancer / network\", \"target application\") as owner\n| stats count(*) as errors, count_distinct(target_port) as targets_affected, earliest(time) as first_seen, latest(time) as last_seen by owner, lb, elb_status_code\n| sort errors desc",
+                  "region": "${AWS::Region}",
+                  "title": "HTTP 5xx attribution - load balancer vs target application",
+                  "view": "table"
+                }
+              },
+              {
+                "type": "log",
+                "x": 12,
+                "y": 21,
+                "width": 12,
+                "height": 5,
+                "properties": {
+                  "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\",\"connection\"]\n| parse elb /^app\\/(?<lb>[^\\/]+)/\n| stats count(request_line) as requests, count(listener_port) as tcp_connections, count(request_line)*1.0/count(listener_port) as reqs_per_connection, count_distinct(client_ip) as distinct_clients, sum(elb_status_code = 502) as http_502, sum(target_status_code = \"-\") as no_target_response by lb\n| sort reqs_per_connection asc",
+                  "region": "${AWS::Region}",
+                  "title": "Connection reuse and 502 errors by load balancer",
+                  "view": "table"
+                }
+              },
+              {
+                "type": "log",
+                "x": 0,
+                "y": 26,
+                "width": 12,
+                "height": 8,
+                "properties": {
+                  "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\"]\n| filter target_processing_time >= 0\n| parse request_line /^(?<method>\\S+)\\s+(?<url>\\S+)/\n| parse url /^[a-z]+:\\/\\/[^\\/]*(?<path>[^?]*)/\n| parse path /^\\/(?<s1>[^\\/]*)\\/?(?<s2>[^\\/]*)/\n| fields if(s2 = \"\", concat(\"/\",s1), concat(\"/\",s1,\"/\",s2)) as route\n| stats count(*) as requests, avg(target_processing_time)*1000 as avg_ms, pct(target_processing_time,90)*1000 as p90_ms, pct(target_processing_time,99)*1000 as p99_ms, max(target_processing_time)*1000 as max_ms by route\n| sort p99_ms desc\n| limit 15",
+                  "region": "${AWS::Region}",
+                  "title": "Endpoint latency by route - p90 / p99 / max",
+                  "view": "table"
+                }
+              },
+              {
+                "type": "log",
+                "x": 12,
+                "y": 26,
+                "width": 12,
+                "height": 8,
+                "properties": {
+                  "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\",\"health_check\"]\n| fields coalesce(target_port, target_addr) as target\n| filter ispresent(target)\n| parse elb /^app\\/(?<lb>[^\\/]+)/\n| stats count(request_line) as requests, sum(elb_status_code >= 500) as errors_5xx, sum(elb_status_code >= 500)*100.0/count(request_line) as error_pct, pct(target_processing_time,99)*1000 as p99_ms, count(status) as probes, sum(status = \"FAIL\") as probe_failures by lb, target\n| sort probe_failures desc, errors_5xx desc\n| limit 20",
+                  "region": "${AWS::Region}",
+                  "title": "Per-target reliability - request errors and health check outcomes",
+                  "view": "table"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 34,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{${MetricNamespace},LoadBalancer} MetricName=\"PlaintextConnections\"', 'Sum')",
+                        "id": "m0",
+                        "label": ""
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Plaintext connections by load balancer",
+                  "view": "timeSeries",
+                  "stacked": false,
+                  "period": 300,
+                  "yAxis": {
+                    "left": {
+                      "label": "connections",
+                      "showUnits": false,
+                      "min": 0
+                    }
+                  },
+                  "legend": {
+                    "position": "bottom"
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 34,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{${MetricNamespace},LoadBalancer} MetricName=\"SyntheticCanaryRequests\"', 'Sum')",
+                        "id": "m0",
+                        "label": ""
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Synthetic canary requests by load balancer",
+                  "view": "timeSeries",
+                  "stacked": false,
+                  "period": 300,
+                  "yAxis": {
+                    "left": {
+                      "label": "requests",
+                      "showUnits": false,
+                      "min": 0
+                    }
+                  },
+                  "legend": {
+                    "position": "bottom"
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 40,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{${MetricNamespace},LoadBalancer} MetricName=\"HealthCheckProbeFailures\"', 'Sum')",
+                        "id": "m0",
+                        "label": "probe failures"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SEARCH('{${MetricNamespace},LoadBalancer} MetricName=\"TargetNoResponse\"', 'Sum')",
+                        "id": "m1",
+                        "label": "no target response"
+                      }
+                    ]
+                  ],
+                  "region": "${AWS::Region}",
+                  "title": "Health check probe failures and requests with no target response",
+                  "view": "timeSeries",
+                  "stacked": false,
+                  "period": 300,
+                  "yAxis": {
+                    "left": {
+                      "label": "events",
+                      "showUnits": false,
+                      "min": 0
+                    }
+                  },
+                  "legend": {
+                    "position": "bottom"
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 40,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "Top client IPs by connection count",
+                  "region": "${AWS::Region}",
+                  "insightRule": {
+                    "maxContributorCount": 10,
+                    "orderBy": "Sum",
+                    "ruleName": "${ResourcePrefix}-TopClientIPs-ConnectionLogs"
+                  },
+                  "view": "timeSeries",
+                  "period": 300,
+                  "legend": {
+                    "position": "right"
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 46,
+                "width": 24,
+                "height": 7,
+                "properties": {
+                  "title": "Top targets by request volume",
+                  "region": "${AWS::Region}",
+                  "insightRule": {
+                    "maxContributorCount": 15,
+                    "orderBy": "Sum",
+                    "ruleName": "${ResourcePrefix}-TopTargetsByRequests-AccessLogs"
+                  },
+                  "view": "timeSeries",
+                  "period": 300,
+                  "legend": {
+                    "position": "right"
+                  }
+                }
+              }${CorrelationWidgets}
+            ]
+          }
+        - CorrelationWidgets: !If
+            - EnableCorrelation
+            - !Sub |-
+                ,
+                {
+                  "type": "text",
+                  "x": 0,
+                  "y": 53,
+                  "width": 24,
+                  "height": 5,
+                  "properties": {
+                    "markdown": "### Correlating ALB access logs with VPC flow logs\n\nA 502 with `target_status_code = \"-\"` means the target never answered, and the access log cannot say why.\nJoin it to the flow log on **ALB access log `target_port` (ip:port) = flow log `dstaddr` + `dstport`**, scoped\nto the load balancer's own ENIs as `srcaddr` (`${LoadBalancerNodeIp1}`, `${LoadBalancerNodeIp2}`). Without that `srcaddr` scope the\nresults also pick up internet hosts scanning port ${TargetPort} on the load balancer itself.\n\n| Flow log shows | Cause | Owner |\n|---|---|---|\n| `rejected_flows` > 0 | security group or NACL blocks the path | network |\n| `reset_flows` > 0 | target refused or reset the connection: process down, or port not listening | service |\n| both 0, flows present | packets delivered, application abandoned the request (keepalive / timeout / worker exhaustion) | service |\n| no flows at all | request never left the load balancer: target registration or listener rule | ALB config |\n\nFlow logs aggregate over 600s, so widen the time range to cover the incident before drawing a conclusion."
+                  }
+                },
+                {
+                  "type": "log",
+                  "x": 0,
+                  "y": 58,
+                  "width": 12,
+                  "height": 7,
+                  "properties": {
+                    "query": "SOURCE logGroups()\n| filterIndex @data_source_name in [\"aws_alb\"]\n| filterIndex @data_source_type in [\"access\"]\n| filter elb_status_code >= 500 and target_status_code = \"-\"\n| parse elb /^app\\/(?<lb>[^\\/]+)/\n| parse client_port /^(?<client_addr>[^:]+)/\n| stats count(*) as errors, count_distinct(client_addr) as clients_affected, earliest(time) as first_seen, latest(time) as last_seen by lb, target_port, elb_status_code\n| sort errors desc\n| limit 20",
+                    "region": "${AWS::Region}",
+                    "title": "Requests with no target response - candidate targets",
+                    "view": "table"
+                  }
+                },
+                {
+                  "type": "log",
+                  "x": 12,
+                  "y": 58,
+                  "width": 12,
+                  "height": 7,
+                  "properties": {
+                    "query": "SOURCE '${VPCFlowLogsLogGroupName}' | filter @message not like \"NODATA\" and @message not like \"SKIPDATA\"\n| parse @message \"* * * * * * * * * * * * * * * * * * * * * * * * * * * * *\" as account, action, az_id, bytes_tx, dstaddr, dstport, end_ts, flow_direction, instance_id, interface_id, log_status, packets, pkt_dst_svc, pkt_dstaddr, pkt_src_svc, pkt_srcaddr, protocol, region, srcaddr, srcport, start_ts, subloc_id, subloc_type, subnet_id, tcp_flags, traffic_path, type_, version, vpc_id\n| filter srcaddr in [\"${LoadBalancerNodeIp1}\",\"${LoadBalancerNodeIp2}\"] and dstport = \"${TargetPort}\"\n| stats count(*) as flows, sum(action = \"REJECT\") as rejected_flows, sum(tcp_flags in [\"4\",\"5\",\"6\",\"7\",\"12\",\"13\",\"14\",\"15\",\"20\",\"21\",\"22\",\"23\"]) as reset_flows, sum(bytes_tx) as bytes_to_target by dstaddr\n| sort flows desc",
+                    "region": "${AWS::Region}",
+                    "title": "ALB node to target packet outcomes - rejects and resets",
+                    "view": "table"
+                  }
+                },
+                {
+                  "type": "log",
+                  "x": 0,
+                  "y": 65,
+                  "width": 24,
+                  "height": 6,
+                  "properties": {
+                    "query": "SOURCE '${VPCFlowLogsLogGroupName}' | filter @message not like \"NODATA\" and @message not like \"SKIPDATA\"\n| parse @message \"* * * * * * * * * * * * * * * * * * * * * * * * * * * * *\" as account, action, az_id, bytes_tx, dstaddr, dstport, end_ts, flow_direction, instance_id, interface_id, log_status, packets, pkt_dst_svc, pkt_dstaddr, pkt_src_svc, pkt_srcaddr, protocol, region, srcaddr, srcport, start_ts, subloc_id, subloc_type, subnet_id, tcp_flags, traffic_path, type_, version, vpc_id\n| filter srcaddr in [\"${LoadBalancerNodeIp1}\",\"${LoadBalancerNodeIp2}\"] and dstport = \"${TargetPort}\"\n| stats sum(tcp_flags = \"2\") as syn_only, sum(tcp_flags = \"3\") as syn_and_fin, sum(tcp_flags = \"1\") as fin_only, sum(tcp_flags = \"0\") as mid_flow, sum(tcp_flags in [\"4\",\"5\",\"6\",\"7\",\"12\",\"13\",\"14\",\"15\",\"20\",\"21\",\"22\",\"23\"]) as carries_rst, count(*) as flows by srcaddr, dstaddr\n| sort flows desc",
+                    "region": "${AWS::Region}",
+                    "title": "TCP flag distribution on the ALB to target path",
+                    "view": "table"
+                  }
+                }
+            - ''
+
+  # --- Metric filters -----------------------------------------------------
+  # $.status exists only in health check records, so field presence selects the
+  # log type. Metric filters cannot be scoped to a log stream.
+  HealthCheckProbeFailuresFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableMonitoring
+    Properties:
+      FilterName: !Sub '${ResourcePrefix}-HealthCheckProbeFailures'
+      LogGroupName: !Ref ALBLogGroupName
+      FilterPattern: '{ $.status = "FAIL" }'
+      MetricTransformations:
+        - MetricName: HealthCheckProbeFailures
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: '1'
+          # DefaultValue and Dimensions are mutually exclusive; a dimensioned
+          # filter cannot also emit 0 for periods with no matches.
+          Dimensions:
+            - Key: elb
+              Value: $.elb
+
+  # target_status_code is "-" when the target never responded, which makes this
+  # the load balancer or network side rather than the application.
+  NoTargetResponseFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableMonitoring
+    Properties:
+      FilterName: !Sub '${ResourcePrefix}-NoTargetResponse'
+      LogGroupName: !Ref ALBLogGroupName
+      FilterPattern: '{ $.target_status_code = "-" }'
+      MetricTransformations:
+        - MetricName: NoTargetResponse
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: '1'
+          # DefaultValue and Dimensions are mutually exclusive; a dimensioned
+          # filter cannot also emit 0 for periods with no matches.
+          Dimensions:
+            - Key: elb
+              Value: $.elb
+
+  # ALB has no HTTPS listener metric that distinguishes plaintext connections,
+  # so this comes from the connection log.
+  PlaintextConnectionsFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableMonitoring
+    Properties:
+      FilterName: !Sub '${ResourcePrefix}-PlaintextConnections'
+      LogGroupName: !Ref ALBLogGroupName
+      FilterPattern: '{ $.tls_protocol = "-" && $.client_ip = "*" }'
+      MetricTransformations:
+        - MetricName: PlaintextConnections
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: '1'
+          # DefaultValue and Dimensions are mutually exclusive; a dimensioned
+          # filter cannot also emit 0 for periods with no matches.
+          Dimensions:
+            - Key: elb
+              Value: $.elb
+
+  SyntheticCanaryRequestsFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableMonitoring
+    Properties:
+      FilterName: !Sub '${ResourcePrefix}-SyntheticCanaryRequests'
+      LogGroupName: !Ref ALBLogGroupName
+      FilterPattern: '{ $.user_agent = "*CloudWatchSynthetics*" }'
+      MetricTransformations:
+        - MetricName: SyntheticCanaryRequests
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: '1'
+          # DefaultValue and Dimensions are mutually exclusive; a dimensioned
+          # filter cannot also emit 0 for periods with no matches.
+          Dimensions:
+            - Key: elb
+              Value: $.elb
+
+  # --- Contributor Insights rules ----------------------------------------
+  # client_ip is a discrete field only in the connection log; access logs carry
+  # the client as client_port ("ip:port"). The IsPresent filter selects the type.
+  TopClientIPsRule:
+    Type: AWS::CloudWatch::InsightRule
+    Condition: EnableMonitoring
+    Properties:
+      RuleName: !Sub '${ResourcePrefix}-TopClientIPs-ConnectionLogs'
+      RuleState: ENABLED
+      RuleBody: !Sub |
+        {
+          "Schema": { "Name": "CloudWatchLogRule", "Version": 1 },
+          "LogGroupNames": ["${ALBLogGroupName}"],
+          "LogFormat": "JSON",
+          "AggregateOn": "Count",
+          "Contribution": {
+            "Keys": ["$.client_ip"],
+            "Filters": [
+              { "Match": "$.client_ip", "IsPresent": true }
+            ]
+          }
+        }
+
+  TopTargetsByRequestsRule:
+    Type: AWS::CloudWatch::InsightRule
+    Condition: EnableMonitoring
+    Properties:
+      RuleName: !Sub '${ResourcePrefix}-TopTargetsByRequests-AccessLogs'
+      RuleState: ENABLED
+      RuleBody: !Sub |
+        {
+          "Schema": { "Name": "CloudWatchLogRule", "Version": 1 },
+          "LogGroupNames": ["${ALBLogGroupName}"],
+          "LogFormat": "JSON",
+          "AggregateOn": "Count",
+          "Contribution": {
+            "Keys": ["$.target_port"],
+            "Filters": [
+              { "Match": "$.target_port", "IsPresent": true },
+              { "Match": "$.request_line", "IsPresent": true }
+            ]
+          }
+        }
+
+Outputs:
+  DashboardURL:
+    Description: Direct link to the deployed dashboard.
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${DashboardName}'
+
+  ALBLogGroup:
+    Description: >
+      Log group the metric filters and Contributor Insights rules are attached to.
+      The dashboard log widgets query by data source index, not by this name.
+    Value: !Ref ALBLogGroupName
+
+  MonitoringResourcesCreated:
+    Description: Whether metric filters and Contributor Insights rules were created.
+    Value: !Ref CreateMonitoringResources
+
+  CorrelationRowCreated:
+    Description: >
+      Whether the VPC Flow Logs correlation row was added to the dashboard. Requires
+      both VPCFlowLogsLogGroupName and LoadBalancerNodeIp1.
+    Value: !If [EnableCorrelation, 'Yes', 'No']
